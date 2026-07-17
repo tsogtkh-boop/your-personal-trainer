@@ -55,6 +55,34 @@ export class PoseEngine {
     await this.video.play();
   }
 
+  /** Play a prerecorded clip (real-athlete demo) and run pose detection on it. */
+  async openVideoFile(uri: string): Promise<void> {
+    if (!this.video) throw new Error('call init first');
+    if (this.stream) {
+      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+    }
+    this.video.srcObject = null;
+    this.video.crossOrigin = 'anonymous';
+    this.video.loop = true;
+    this.video.muted = true;
+    this.video.src = uri;
+    await new Promise<void>((resolve, reject) => {
+      const v = this.video!;
+      const onErr = () => reject(new Error('demo video failed to load'));
+      v.onloadeddata = () => resolve();
+      v.onerror = onErr;
+      setTimeout(onErr, 15000);
+    });
+    // Autoplay may be blocked until a user gesture — don't treat that as fatal;
+    // the clip is loaded and will play on the first interaction.
+    try {
+      await this.video.play();
+    } catch {
+      /* autoplay blocked — keep the loaded clip on screen anyway */
+    }
+  }
+
   start(onPose: PoseCallback): void {
     this.running = true;
     const loop = async () => {

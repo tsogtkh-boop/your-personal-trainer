@@ -8,6 +8,7 @@ import { MealPlan, RecoveryEntry, TrainingPlan, UserProfile, WorkoutLog } from '
 import { EXERCISES } from './exercises';
 import { analyzeRecovery } from './recovery';
 import { dailyReadiness } from './fatigue';
+import { Units, displayWeight, weightUnit } from './units';
 
 export interface CoachContext {
   name: string;
@@ -16,6 +17,7 @@ export interface CoachContext {
   mealPlan: MealPlan | null;
   logs: WorkoutLog[];
   recovery: RecoveryEntry[];
+  units: Units;
 }
 
 const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
@@ -25,9 +27,10 @@ function progressSummary(ctx: CoachContext): string {
   const last = ctx.logs[ctx.logs.length - 1];
   const week = ctx.logs.filter((l) => Date.now() - new Date(l.date).getTime() < 7 * 864e5);
   const vol = week.reduce((a, b) => a + b.totalVolumeKg, 0);
+  const u = weightUnit(ctx.units);
   return (
-    `This week: ${week.length} workout${week.length === 1 ? '' : 's'}, ${Math.round(vol).toLocaleString()} kg total volume. ` +
-    `Last session you moved ${Math.round(last.totalVolumeKg).toLocaleString()} kg across ${last.exercises.length} exercise${last.exercises.length === 1 ? '' : 's'}. ` +
+    `This week: ${week.length} workout${week.length === 1 ? '' : 's'}, ${displayWeight(vol, ctx.units)} ${u} total volume. ` +
+    `Last session you moved ${displayWeight(last.totalVolumeKg, ctx.units)} ${u} across ${last.exercises.length} exercise${last.exercises.length === 1 ? '' : 's'}. ` +
     (week.length >= 3 ? 'Consistency is elite right now — keep the streak alive. 🔥' : 'One more session this week and the momentum compounds.')
   );
 }
@@ -109,15 +112,16 @@ export function localCoachReply(ctx: CoachContext, userText: string): string {
 }
 
 function buildSystemPrompt(ctx: CoachContext): string {
+  const u = weightUnit(ctx.units);
   const recent = ctx.logs.slice(-3).map((l) => ({
     date: l.date.slice(0, 10),
-    volumeKg: Math.round(l.totalVolumeKg),
-    exercises: l.exercises.map((e) => `${e.name} ${e.sets.map((s) => `${s.reps}x${s.weightKg}kg`).join(', ')}`),
+    volume: `${displayWeight(l.totalVolumeKg, ctx.units)}${u}`,
+    exercises: l.exercises.map((e) => `${e.name} ${e.sets.map((s) => `${s.reps}x${displayWeight(s.weightKg, ctx.units)}${u}`).join(', ')}`),
   }));
   const rec = analyzeRecovery(ctx.recovery);
   return [
-    `You are "Coach", an elite personal trainer inside a fitness app. Voice: warm, direct, motivating, concise (2-5 sentences), practical. Use the client's data below. Never invent data you don't have.`,
-    `Client: ${ctx.name}, ${ctx.profile.age}yo ${ctx.profile.sex}, ${ctx.profile.heightCm}cm, ${ctx.profile.weightKg}kg, goal: ${ctx.profile.goal}, experience: ${ctx.profile.experience}.`,
+    `You are "Coach", an elite personal trainer inside a fitness app. Voice: warm, direct, motivating, concise (2-5 sentences), practical. Use the client's data below. Never invent data you don't have. Always express weights in ${u === 'lb' ? 'pounds (lb)' : 'kilograms (kg)'}.`,
+    `Client: ${ctx.name}, ${ctx.profile.age}yo ${ctx.profile.sex}, ${ctx.profile.heightCm}cm, ${displayWeight(ctx.profile.weightKg, ctx.units)}${u}, goal: ${ctx.profile.goal}, experience: ${ctx.profile.experience}.`,
     ctx.plan ? `Current plan: ${ctx.plan.name}. Progression: ${ctx.plan.progression}` : 'No training plan yet.',
     ctx.mealPlan
       ? `Nutrition targets: ${ctx.mealPlan.targetKcal} kcal, ${ctx.mealPlan.proteinG}g protein, ${ctx.mealPlan.carbsG}g carbs, ${ctx.mealPlan.fatG}g fat.`

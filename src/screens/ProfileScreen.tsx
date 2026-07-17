@@ -5,6 +5,8 @@ import { colors, spacing } from '../theme';
 import { useStore } from '../store/useStore';
 import { CONNECTOR_INFO, downloadFile, healthExportJSON, syncConnector, workoutsToCSV } from '../lib/health';
 import { SubscriptionTier } from '../types';
+import { displayWeight, parseWeightToKg, weightUnit } from '../lib/units';
+import { setVoiceGender, speak } from '../lib/voice';
 
 const TIERS: { key: SubscriptionTier; name: string; price: string; perks: string[] }[] = [
   { key: 'free', name: 'Free', price: '$0', perks: ['3 tracked workouts / week', 'Built-in coach', 'Manual logging'] },
@@ -29,9 +31,16 @@ export const ProfileScreen: React.FC = () => {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [keyDraft, setKeyDraft] = useState(store.settings.claudeApiKey);
-  const [weight, setWeight] = useState(String(user?.profile.weightKg ?? ''));
+  const units = store.settings.units;
+  const [weight, setWeight] = useState(user ? displayWeight(user.profile.weightKg, units) : '');
 
   if (!user) return null;
+
+  const changeUnits = (u: 'metric' | 'imperial') => {
+    if (u === units) return;
+    store.setSettings({ units: u });
+    setWeight(displayWeight(user.profile.weightKg, u));
+  };
 
   const doSync = async () => {
     setSyncing(true);
@@ -61,13 +70,24 @@ export const ProfileScreen: React.FC = () => {
         <Body dim style={{ marginBottom: spacing(1) }}>
           {`${user.profile.age}y · ${user.profile.heightCm} cm · goal: ${user.profile.goal.replace('_', ' ')} · ${user.profile.experience}`}
         </Body>
-        <Row>
-          <Input value={weight} onChangeText={setWeight} placeholder="Weight (kg)" keyboardType="numeric" style={{ flex: 1, marginBottom: 0 }} />
+        <Body dim style={{ marginBottom: 4 }}>Units</Body>
+        <Row style={{ flexWrap: 'wrap' }}>
+          <Chip label="Kilograms (kg)" active={units === 'metric'} onPress={() => changeUnits('metric')} />
+          <Chip label="Pounds (lb)" active={units === 'imperial'} onPress={() => changeUnits('imperial')} />
+        </Row>
+        <Row style={{ marginTop: spacing(0.5) }}>
+          <Input
+            value={weight}
+            onChangeText={setWeight}
+            placeholder={`Weight (${weightUnit(units)})`}
+            keyboardType="numeric"
+            style={{ flex: 1, marginBottom: 0 }}
+          />
           <Button
             title="Update weight"
             kind="ghost"
             small
-            onPress={() => store.updateProfile({ weightKg: parseFloat(weight) || user.profile.weightKg })}
+            onPress={() => store.updateProfile({ weightKg: parseWeightToKg(weight, units) || user.profile.weightKg })}
           />
         </Row>
       </Card>
@@ -79,35 +99,36 @@ export const ProfileScreen: React.FC = () => {
             {`Renews ${new Date(user.subscription.renewsAt).toLocaleDateString()}`}
           </Body>
         )}
-        <Row style={{ gap: spacing(1), alignItems: 'stretch' }}>
+        <View style={{ gap: spacing(1.25) }}>
           {TIERS.map((t) => (
             <View
               key={t.key}
               style={{
-                flex: 1,
                 backgroundColor: colors.surfaceAlt,
-                borderRadius: 12,
+                borderRadius: 16,
                 borderWidth: 2,
                 borderColor: user.subscription.tier === t.key ? colors.primary : colors.border,
-                padding: spacing(1.5),
+                padding: spacing(1.75),
               }}
             >
-              <H1 style={{ marginBottom: 0 }}>{t.name}</H1>
-              <Body style={{ color: colors.primary, fontWeight: '800', marginBottom: spacing(1) }}>{t.price}</Body>
+              <Row style={{ justifyContent: 'space-between', marginBottom: spacing(0.75) }}>
+                <H1 style={{ marginBottom: 0 }}>{t.name}</H1>
+                <Body style={{ color: colors.primaryLight, fontWeight: '800' }}>{t.price}</Body>
+              </Row>
               {t.perks.map((p) => (
-                <Body key={p} dim style={{ fontSize: 12, marginBottom: 3 }}>{`• ${p}`}</Body>
+                <Body key={p} dim style={{ fontSize: 12.5, marginBottom: 3 }}>{`• ${p}`}</Body>
               ))}
               <Button
-                title={user.subscription.tier === t.key ? 'Current' : t.key === 'free' ? 'Downgrade' : 'Upgrade'}
+                title={user.subscription.tier === t.key ? 'Current plan' : t.key === 'free' ? 'Downgrade' : 'Upgrade'}
                 small
                 kind={user.subscription.tier === t.key ? 'ghost' : 'primary'}
                 disabled={user.subscription.tier === t.key}
                 onPress={() => store.setSubscription(t.key)}
-                style={{ marginTop: spacing(1) }}
+                style={{ marginTop: spacing(1), alignSelf: 'flex-start' }}
               />
             </View>
           ))}
-        </Row>
+        </View>
         <Body dim style={{ marginTop: spacing(1), fontSize: 12 }}>
           Demo build: checkout is simulated — no payment is taken.
         </Body>
@@ -158,7 +179,29 @@ export const ProfileScreen: React.FC = () => {
             trackColor={{ true: colors.primary, false: colors.border }}
           />
         </Row>
-        <Body dim style={{ marginBottom: 6 }}>
+        <Body dim style={{ marginBottom: 4 }}>Coach voice</Body>
+        <Row style={{ flexWrap: 'wrap' }}>
+          <Chip
+            label="Female voice"
+            active={store.settings.voiceGender === 'female'}
+            onPress={() => {
+              store.setSettings({ voiceGender: 'female' });
+              setVoiceGender('female');
+              speak("Hey! I'm your coach. Let's get to work.", { interrupt: true });
+            }}
+          />
+          <Chip
+            label="Male voice"
+            active={store.settings.voiceGender === 'male'}
+            onPress={() => {
+              store.setSettings({ voiceGender: 'male' });
+              setVoiceGender('male');
+              speak("Hey! I'm your coach. Let's get to work.", { interrupt: true });
+            }}
+          />
+          <Chip label="🔊 Test voice" onPress={() => speak('Nice work — three more reps. Keep that core tight.', { interrupt: true })} />
+        </Row>
+        <Body dim style={{ marginTop: spacing(1), marginBottom: 6 }}>
           Claude API key (optional — powers the live LLM coach; stored only in your browser)
         </Body>
         <Row>

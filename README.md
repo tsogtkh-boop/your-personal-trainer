@@ -66,6 +66,19 @@ src/
   screens/                   Auth, Dashboard, Workout, Coach, Plan, Meals, Recovery, Profile
 ```
 
+## Demo footage credits
+
+Demo mode plays real-athlete exercise clips and runs the live pose AI on them. Videos and poster
+photos are from [Wikimedia Commons](https://commons.wikimedia.org), used under their Creative
+Commons licenses:
+
+| Asset | Source file | License |
+|---|---|---|
+| squat, deadlift, bench press, shoulder press, pull-ups, bent-over row (`assets/demo/*.webm`, `assets/img/*.jpg`) | "*<exercise>* — exercise demonstration video.webm" series by Everkinetic | CC BY 3.0 |
+| bicep_curl | "Video of EZ Bar Curl and Straight Bar Curl.webm" | CC BY 3.0 |
+| lunge | "Forward lunge training.webm" | CC BY-SA 4.0 |
+| push_up | "Interval Push-ups.webm" by Taco Fleur | CC BY-SA 4.0 |
+
 ## Notes
 
 - All data is stored locally (browser localStorage via AsyncStorage). No backend required.

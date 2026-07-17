@@ -8,6 +8,8 @@ import { RepCounter } from '../lib/repCounter';
 import { toPoseMap, KP } from '../lib/geometry';
 import { PoseEngine, PoseSimulator, drawSkeleton } from '../lib/poseEngine';
 import { VoiceControl, VoiceCommand, speak, setSpeechEnabled, voiceSupported } from '../lib/voice';
+import { demoVideoUri } from '../lib/demoMedia';
+import { displayWeight, kgToLb, weightUnit } from '../lib/units';
 import { HeartRateMonitor, bluetoothSupported, hrZone, restRecommendation } from '../lib/bluetoothHR';
 import { adaptNextSet, setFatigueScore } from '../lib/fatigue';
 import { ExerciseLog, PlannedExercise, SetLog, WorkoutLog } from '../types';
@@ -27,6 +29,10 @@ export const WorkoutScreen: React.FC = () => {
   const user = store.currentUser();
   const data = store.data();
   const settings = store.settings;
+  const units = settings.units;
+  // Weight spoken by the coach, in the user's unit.
+  const spokenWeight = (kg: number) =>
+    units === 'imperial' ? `${Math.round(kgToLb(kg))} pounds` : `${Math.round(kg * 10) / 10} kilos`;
 
   // ---- workout plan for this session ----
   const [phase, setPhase] = useState<Phase>('setup');
@@ -51,6 +57,8 @@ export const WorkoutScreen: React.FC = () => {
   const [voiceOn, setVoiceOn] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [engineLoading, setEngineLoading] = useState(false);
+  const [demoSource, setDemoSource] = useState<'video' | 'sim' | null>(null);
+  const [stageAspect, setStageAspect] = useState(4 / 3);
 
   // ---- refs (avoid stale closures in loops) ----
   const counterRef = useRef<RepCounter | null>(null);
@@ -58,6 +66,8 @@ export const WorkoutScreen: React.FC = () => {
   const simRef = useRef<PoseSimulator | null>(null);
   const simTimerRef = useRef<any>(null);
   const restTimerRef = useRef<any>(null);
+  const watchdogRef = useRef<any>(null);
+  const syntheticCountRef = useRef(false);
   const hrRef = useRef<HeartRateMonitor | null>(null);
   const hrSamplesRef = useRef<number[]>([]);
   const allHrRef = useRef<number[]>([]);
@@ -119,7 +129,7 @@ export const WorkoutScreen: React.FC = () => {
     startVoice();
     const first = exercises[0];
     speak(
-      `Let's go! ${dayName ?? first.def.name} session. First up: ${first.def.name}, ${first.sets[0].targetReps} reps${first.def.weighted ? ` at ${first.sets[0].weightKg} kilos` : ''}. ${first.def.cues[0]}.`,
+      `Let's go! ${dayName ?? first.def.name} session. First up: ${first.def.name}, ${first.sets[0].targetReps} reps${first.def.weighted ? ` at ${spokenWeight(first.sets[0].weightKg)}` : ''}. ${first.def.cues[0]}.`,
       { interrupt: true },
     );
   };
@@ -139,11 +149,10 @@ export const WorkoutScreen: React.FC = () => {
     startTracking(def);
   };
 
-  const onFrame = useCallback((kps: KP[]) => {
-    if (phaseRef.current !== 'active') return;
+  // Feed a pose into the rep counter and reflect it in the UI.
+  const feedCounter = (m: ReturnType<typeof toPoseMap>) => {
     const counter = counterRef.current;
     if (!counter) return;
-    const m = toPoseMap(kps);
     const st = counter.update(m, Date.now() / 1000);
     setReps(st.reps);
     setAngle(st.angle);
@@ -152,57 +161,186 @@ export const WorkoutScreen: React.FC = () => {
       setFeedback(st.feedback);
       speak(st.feedback);
     }
-    // draw overlay
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) drawSkeleton(ctx, kps, canvas.width, canvas.height, canvas.width / 640, canvas.height / 480);
-    }
-    // auto-complete set at target
     const { exIdx: e, setIdx: s } = idxRef.current;
     const target = sessionRef.current.exercises[e]?.sets[s]?.targetReps ?? 999;
     if (st.reps >= target) finishSet();
+  };
+
+  const drawKps = (kps: KP[]) => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) drawSkeleton(ctx, kps, canvas.width, canvas.height, 1, 1);
+    }
+  };
+
+  // From MoveNet (live camera or real-athlete video): draw the detected skeleton,
+  // and count from it unless we've handed counting to the synthetic cadence.
+  const onPoseFrame = useCallback((kps: KP[]) => {
+    if (phaseRef.current !== 'active') return;
+    drawKps(kps);
+    if (!syntheticCountRef.current) feedCounter(toPoseMap(kps));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onFrameRef = useRef(onFrame);
-  onFrameRef.current = onFrame;
+  // Pure simulator (exercises with no demo clip): synthetic skeleton drives both.
+  const onSimFrame = useCallback((kps: KP[]) => {
+    if (phaseRef.current !== 'active') return;
+    drawKps(kps);
+    feedCounter(toPoseMap(kps));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const startTracking = async (def: ExerciseDef) => {
-    stopTracking();
-    if (useCamera && Platform.OS === 'web') {
-      try {
-        setEngineLoading(true);
-        if (!engineRef.current) {
-          engineRef.current = new PoseEngine();
-          await engineRef.current.init(videoRef.current!);
-          await engineRef.current.openCamera();
-        }
-        engineRef.current.start((kps) => onFrameRef.current(kps));
-        setEngineLoading(false);
-        setCameraError(null);
-        return;
-      } catch (err: any) {
-        setEngineLoading(false);
-        setCameraError(`Camera unavailable (${err?.message ?? 'denied'}) — using demo mode instead.`);
-      }
+  // Hybrid: keep the real athlete video on screen, but drive rep cadence
+  // synthetically (no skeleton drawn over the real footage).
+  const onSyntheticCountFrame = useCallback((kps: KP[]) => {
+    if (phaseRef.current !== 'active') return;
+    feedCounter(toPoseMap(kps));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onPoseFrameRef = useRef(onPoseFrame);
+  onPoseFrameRef.current = onPoseFrame;
+  const onSimFrameRef = useRef(onSimFrame);
+  onSimFrameRef.current = onSimFrame;
+  const onSyntheticCountFrameRef = useRef(onSyntheticCountFrame);
+  onSyntheticCountFrameRef.current = onSyntheticCountFrame;
+
+  /** Create the DOM video/canvas elements early so tracking can start before the mount effect runs. */
+  const ensureStageEls = () => {
+    if (Platform.OS !== 'web') return;
+    if (!videoRef.current) {
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;';
+      videoRef.current = video;
     }
-    // demo simulator
+    if (!canvasRef.current) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 480;
+      canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
+      canvasRef.current = canvas;
+    }
+  };
+
+  const configureStage = (srcW: number, srcH: number, mirror: boolean, showVideo: boolean) => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.width = srcW;
+      canvas.height = srcH;
+      canvas.style.transform = mirror ? 'scaleX(-1)' : 'none';
+    }
+    if (video) {
+      video.style.transform = mirror ? 'scaleX(-1)' : 'none';
+      video.style.display = showVideo ? 'block' : 'none';
+    }
+    setStageAspect(srcW / srcH);
+  };
+
+  const startSimInterval = (def: ExerciseDef, cb: (kps: KP[]) => void) => {
+    if (simTimerRef.current) clearInterval(simTimerRef.current);
     simRef.current = new PoseSimulator(def);
     let last = Date.now();
     simTimerRef.current = setInterval(() => {
       const now = Date.now();
       const dt = (now - last) / 1000;
       last = now;
-      const kps = simRef.current!.tick(dt);
-      onFrameRef.current(kps);
+      cb(simRef.current!.tick(dt));
     }, 50);
+  };
+
+  // Pure synthetic athlete — used only for exercises that have no demo clip.
+  const startSimulator = (def: ExerciseDef, note?: string) => {
+    engineRef.current?.stop();
+    syntheticCountRef.current = false;
+    configureStage(640, 480, false, false);
+    setDemoSource('sim');
+    if (note !== undefined) setCameraError(note);
+    startSimInterval(def, (kps) => onSimFrameRef.current(kps));
+  };
+
+  // Keep the real athlete video playing & visible, but count reps synthetically.
+  const startHybridCounting = (def: ExerciseDef) => {
+    syntheticCountRef.current = true;
+    // clear any stale skeleton drawn over the real footage
+    const canvas = canvasRef.current;
+    if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    startSimInterval(def, (kps) => onSyntheticCountFrameRef.current(kps));
+  };
+
+  const startTracking = async (def: ExerciseDef) => {
+    stopTracking();
+    ensureStageEls();
+    syntheticCountRef.current = false;
+
+    // 1) live camera
+    if (useCamera && Platform.OS === 'web') {
+      try {
+        setEngineLoading(true);
+        if (!engineRef.current) {
+          engineRef.current = new PoseEngine();
+          await engineRef.current.init(videoRef.current!);
+        }
+        await engineRef.current.openCamera();
+        configureStage(640, 480, true, true);
+        setDemoSource(null);
+        engineRef.current.start((kps) => onPoseFrameRef.current(kps));
+        setEngineLoading(false);
+        setCameraError(null);
+        return;
+      } catch (err: any) {
+        setEngineLoading(false);
+        setCameraError(`Camera unavailable (${err?.message ?? 'denied'}) — using athlete demo instead.`);
+      }
+    }
+
+    // 2) real-athlete demo footage with live pose detection
+    const uri = Platform.OS === 'web' ? demoVideoUri(def.id) : null;
+    if (uri) {
+      try {
+        setEngineLoading(true);
+        if (!engineRef.current) {
+          engineRef.current = new PoseEngine();
+          await engineRef.current.init(videoRef.current!);
+        }
+        await engineRef.current.openVideoFile(uri);
+        const v = videoRef.current!;
+        configureStage(v.videoWidth || 640, v.videoHeight || 480, false, true);
+        setDemoSource('video');
+        setCameraError(null);
+        engineRef.current.start((kps) => onPoseFrameRef.current(kps));
+        setEngineLoading(false);
+        // Real clips vary — if the pose AI hasn't counted a rep from this footage
+        // shortly, keep the athlete on screen and drive the rep cadence ourselves.
+        watchdogRef.current = setTimeout(() => {
+          if (phaseRef.current === 'active' && (counterRef.current?.state.reps ?? 0) === 0) {
+            startHybridCounting(def);
+          }
+        }, 9000);
+        return;
+      } catch {
+        setEngineLoading(false);
+      }
+    }
+
+    // 3) synthetic simulator (no clip for this exercise)
+    startSimulator(def);
   };
 
   const stopTracking = () => {
     if (simTimerRef.current) clearInterval(simTimerRef.current);
     simTimerRef.current = null;
+    if (watchdogRef.current) clearTimeout(watchdogRef.current);
+    watchdogRef.current = null;
     engineRef.current?.stop();
+    try {
+      videoRef.current?.pause?.();
+    } catch {
+      /* noop */
+    }
   };
 
   const finishSet = (viaVoice = false) => {
@@ -328,7 +466,7 @@ export const WorkoutScreen: React.FC = () => {
     setSetIdx(s);
     const def = sess.exercises[e].def;
     const plan = sess.exercises[e].sets[s];
-    if (!skip) speak(`Set ${s + 1}: ${plan.targetReps} reps${def.weighted ? ` at ${plan.weightKg} kilos` : ''}. Go when ready.`);
+    if (!skip) speak(`Set ${s + 1}: ${plan.targetReps} reps${def.weighted ? ` at ${spokenWeight(plan.weightKg)}` : ''}. Go when ready.`);
     startSet(def, s);
   };
 
@@ -391,7 +529,7 @@ export const WorkoutScreen: React.FC = () => {
       };
       store.addWorkoutLog(log);
       speak(
-        `Workout complete! ${exercises.length} exercises, ${Math.round(totalVolumeKg)} kilos of total volume. Everything is logged. Great work!`,
+        `Workout complete! ${exercises.length} exercises, ${spokenWeight(totalVolumeKg)} of total volume. Everything is logged. Great work!`,
         { interrupt: true },
       );
     }
@@ -444,10 +582,10 @@ export const WorkoutScreen: React.FC = () => {
     const msg =
       dir > 0
         ? ex.def.weighted
-          ? `Cranking it up — ${ex.sets[s].weightKg} kilos now.`
+          ? `Cranking it up — ${spokenWeight(ex.sets[s].weightKg)} now.`
           : `More reps — target is ${ex.sets[s].targetReps}.`
         : ex.def.weighted
-          ? `Easing off — ${ex.sets[s].weightKg} kilos now.`
+          ? `Easing off — ${spokenWeight(ex.sets[s].weightKg)} now.`
           : `Fewer reps — target is ${ex.sets[s].targetReps}.`;
     setCoachMsg(msg);
     speak(msg, { interrupt: true });
@@ -538,24 +676,9 @@ export const WorkoutScreen: React.FC = () => {
     if (Platform.OS !== 'web') return;
     const host: HTMLElement | null = stageRef.current as any;
     if (!host || phase === 'setup' || phase === 'summary') return;
-    let video = videoRef.current;
-    let canvas = canvasRef.current;
-    if (!video) {
-      video = document.createElement('video');
-      video.width = 640;
-      video.height = 480;
-      video.muted = true;
-      video.playsInline = true;
-      video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);';
-      videoRef.current = video;
-    }
-    if (!canvas) {
-      canvas = document.createElement('canvas');
-      canvas.width = 640;
-      canvas.height = 480;
-      canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;transform:scaleX(-1);';
-      canvasRef.current = canvas;
-    }
+    ensureStageEls();
+    const video = videoRef.current!;
+    const canvas = canvasRef.current!;
     if (video.parentElement !== host) host.appendChild(video);
     if (canvas.parentElement !== host) host.appendChild(canvas);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -604,12 +727,12 @@ export const WorkoutScreen: React.FC = () => {
               <H1>Tracking mode</H1>
               <Row style={{ flexWrap: 'wrap', marginBottom: spacing(1) }}>
                 <Chip label="📷 Camera (pose AI)" active={useCamera} onPress={() => setUseCamera(true)} />
-                <Chip label="🎮 Demo (no camera)" active={!useCamera} onPress={() => setUseCamera(false)} />
+                <Chip label="🎬 Demo (no camera)" active={!useCamera} onPress={() => setUseCamera(false)} />
               </Row>
               <Body dim>
                 {useCamera
                   ? 'Uses your webcam + on-device MoveNet pose AI. Stand back so your whole body is visible, side-on for squats and presses. Nothing is uploaded — all processing stays in your browser.'
-                  : 'Demo mode simulates a moving athlete so you can try rep counting, form feedback, rest timing and voice control without a camera.'}
+                  : 'Demo mode plays footage of real athletes performing each exercise and runs the same live pose AI on it — rep counting, form feedback, rest timing and voice control, no camera needed.'}
               </Body>
             </Card>
 
@@ -651,7 +774,10 @@ export const WorkoutScreen: React.FC = () => {
         <Title>Workout complete 🎉</Title>
         <Row style={{ gap: spacing(1), marginBottom: spacing(1.5) }}>
           <Stat label="exercises" value={`${exercises.length}`} />
-          <Stat label="volume (kg)" value={`${Math.round(vol).toLocaleString()}`} />
+          <Stat
+            label={`volume (${weightUnit(units)})`}
+            value={`${Math.round(units === 'imperial' ? kgToLb(vol) : vol).toLocaleString()}`}
+          />
           <Stat
             label="avg form"
             value={`${
@@ -669,7 +795,7 @@ export const WorkoutScreen: React.FC = () => {
             <H1>{e.name}</H1>
             {e.sets.map((s, i) => (
               <Body key={i} dim>
-                {`Set ${i + 1}: ${s.reps} reps${s.weightKg ? ` × ${s.weightKg} kg` : ''} · form ${s.formScore}${s.rpe ? ` · RPE ${s.rpe}` : ''}${s.avgHr ? ` · HR ${s.avgHr}` : ''}${s.faults.length ? `\n   ⚠ ${s.faults.join(' ')}` : ''}`}
+                {`Set ${i + 1}: ${s.reps} reps${s.weightKg ? ` × ${displayWeight(s.weightKg, units)} ${weightUnit(units)}` : ''} · form ${s.formScore}${s.rpe ? ` · RPE ${s.rpe}` : ''}${s.avgHr ? ` · HR ${s.avgHr}` : ''}${s.faults.length ? `\n   ⚠ ${s.faults.join(' ')}` : ''}`}
               </Body>
             ))}
           </Card>
@@ -698,7 +824,7 @@ export const WorkoutScreen: React.FC = () => {
         ref={stageRef}
         style={{
           width: '100%',
-          aspectRatio: 4 / 3,
+          aspectRatio: stageAspect,
           backgroundColor: '#000',
           borderRadius: 14,
           overflow: 'hidden',
@@ -706,10 +832,13 @@ export const WorkoutScreen: React.FC = () => {
           position: 'relative',
         }}
       >
-        {(!useCamera || cameraError) && (
-          <View style={{ position: 'absolute', top: 8, left: 8, zIndex: 5, backgroundColor: '#0009', borderRadius: 8, padding: 6 }}>
+        {(demoSource || cameraError) && (
+          <View style={{ position: 'absolute', top: 8, left: 8, zIndex: 5, backgroundColor: '#0009', borderRadius: 8, padding: 6, maxWidth: '70%' }}>
             <Text style={{ color: colors.textDim, fontSize: 12 }}>
-              {cameraError ?? '🎮 demo mode — simulated athlete'}
+              {cameraError ??
+                (demoSource === 'video'
+                  ? '🎬 real athlete demo'
+                  : '🎮 demo mode — simulated athlete')}
             </Text>
           </View>
         )}
@@ -746,7 +875,10 @@ export const WorkoutScreen: React.FC = () => {
           value={hr !== null ? `${hr}` : '—'}
           color={zone && zone.zone >= 4 ? colors.danger : colors.accent}
         />
-        <Stat label={def?.weighted ? 'weight (kg)' : 'bodyweight'} value={def?.weighted ? `${currentSet?.weightKg ?? 0}` : 'BW'} />
+        <Stat
+          label={def?.weighted ? `weight (${weightUnit(units)})` : 'bodyweight'}
+          value={def?.weighted ? displayWeight(currentSet?.weightKg ?? 0, units) : 'BW'}
+        />
       </Row>
 
       {phase === 'rpe' && (

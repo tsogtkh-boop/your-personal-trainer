@@ -4,6 +4,7 @@ import { Body, Button, Card, Chip, H1, Input, Row, Screen, Title } from '../comp
 import { colors, spacing } from '../theme';
 import { useStore } from '../store/useStore';
 import { ActivityLevel, Experience, Goal, Sex, UserProfile } from '../types';
+import { parseWeightToKg } from '../lib/units';
 
 const GOALS: { key: Goal; label: string }[] = [
   { key: 'weight_loss', label: 'Lose fat' },
@@ -13,7 +14,8 @@ const GOALS: { key: Goal; label: string }[] = [
 ];
 
 export const AuthScreen: React.FC = () => {
-  const { signIn, signUp } = useStore();
+  const { signIn, signUp, settings, setSettings } = useStore();
+  const units = settings.units;
   const [mode, setMode] = useState<'in' | 'up'>('up');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,12 +25,20 @@ export const AuthScreen: React.FC = () => {
   const [password, setPassword] = useState('');
   const [age, setAge] = useState('30');
   const [heightCm, setHeightCm] = useState('178');
-  const [weightKg, setWeightKg] = useState('78');
+  const [weight, setWeight] = useState(units === 'imperial' ? '172' : '78'); // value shown in the chosen unit
   const [sex, setSex] = useState<Sex>('male');
   const [goal, setGoal] = useState<Goal>('muscle_gain');
   const [activity, setActivity] = useState<ActivityLevel>('moderate');
   const [experience, setExperience] = useState<Experience>('beginner');
   const [diet, setDiet] = useState<UserProfile['dietaryPreference']>('omnivore');
+
+  const switchUnits = (u: 'metric' | 'imperial') => {
+    if (u === units) return;
+    const n = parseFloat(weight) || 0;
+    // convert the currently-shown number into the new unit
+    setWeight(u === 'imperial' ? `${Math.round(n * 2.2046)}` : `${Math.round((n / 2.2046) * 10) / 10}`);
+    setSettings({ units: u });
+  };
 
   const submit = async () => {
     setBusy(true);
@@ -41,7 +51,7 @@ export const AuthScreen: React.FC = () => {
         age: parseInt(age, 10) || 30,
         sex,
         heightCm: parseFloat(heightCm) || 175,
-        weightKg: parseFloat(weightKg) || 75,
+        weightKg: parseWeightToKg(weight, units) || 75,
         goal,
         activityLevel: activity,
         experience,
@@ -74,10 +84,21 @@ export const AuthScreen: React.FC = () => {
         {mode === 'up' && (
           <>
             <H1 style={{ marginTop: spacing(1) }}>About you</H1>
+            <Body dim style={{ marginBottom: 4 }}>Units</Body>
+            <Row style={{ flexWrap: 'wrap' }}>
+              <Chip label="Kilograms (kg)" active={units === 'metric'} onPress={() => switchUnits('metric')} />
+              <Chip label="Pounds (lb)" active={units === 'imperial'} onPress={() => switchUnits('imperial')} />
+            </Row>
             <Row>
               <Input value={age} onChangeText={setAge} placeholder="Age" keyboardType="numeric" style={{ flex: 1 }} />
               <Input value={heightCm} onChangeText={setHeightCm} placeholder="Height (cm)" keyboardType="numeric" style={{ flex: 1 }} />
-              <Input value={weightKg} onChangeText={setWeightKg} placeholder="Weight (kg)" keyboardType="numeric" style={{ flex: 1 }} />
+              <Input
+                value={weight}
+                onChangeText={setWeight}
+                placeholder={units === 'imperial' ? 'Weight (lb)' : 'Weight (kg)'}
+                keyboardType="numeric"
+                style={{ flex: 1 }}
+              />
             </Row>
             <Row style={{ flexWrap: 'wrap' }}>
               <Chip label="Male" active={sex === 'male'} onPress={() => setSex('male')} />

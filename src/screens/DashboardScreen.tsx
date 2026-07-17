@@ -1,107 +1,203 @@
 import React, { useMemo } from 'react';
-import { View } from 'react-native';
-import { Body, Button, Card, H1, ProgressBar, Row, Screen, Stat, Title } from '../components/UI';
-import { colors, spacing } from '../theme';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Body, GradientCard, Ring, Row, Screen, SectionHeader, StatTile, TaskRow } from '../components/UI';
+import { colors, font, radius, spacing } from '../theme';
 import { useStore } from '../store/useStore';
 import { dailyReadiness } from '../lib/fatigue';
-import { analyzeRecovery } from '../lib/recovery';
+import { EXERCISES } from '../lib/exercises';
+import { metaFor } from '../lib/exerciseMeta';
+import { exerciseImage } from '../lib/demoMedia';
+
+const greeting = () => {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good Morning! 👋';
+  if (h < 18) return 'Good Afternoon! 👋';
+  return 'Good Evening! 👋';
+};
 
 export const DashboardScreen: React.FC = () => {
   const store = useStore();
   const user = store.currentUser();
   const data = store.data();
 
-  const stats = useMemo(() => {
-    const week = data.logs.filter((l) => Date.now() - new Date(l.date).getTime() < 7 * 864e5);
-    const volume = week.reduce((a, b) => a + b.totalVolumeKg, 0);
-    const reps = week.reduce((a, w) => a + w.exercises.reduce((x, e) => x + e.sets.reduce((y, s) => y + s.reps, 0), 0), 0);
-    const minutes = week.reduce((a, b) => a + b.durationMin, 0);
-    return { workouts: week.length, volume, reps, minutes };
-  }, [data.logs]);
-
+  const week = useMemo(
+    () => data.logs.filter((l) => Date.now() - new Date(l.date).getTime() < 7 * 864e5),
+    [data.logs],
+  );
+  const planned = data.plan?.daysPerWeek ?? 3;
+  const done = Math.min(week.length, planned);
+  const pct = Math.round((done / planned) * 100);
   const readiness = dailyReadiness(data.recovery.slice(-7));
-  const rec = analyzeRecovery(data.recovery);
+  const weekKcal = Math.round(week.reduce((a, w) => a + w.durationMin * 7, 0));
+
   const nextDay = data.plan ? data.plan.days[data.logs.length % data.plan.days.length] : null;
+  const goalCards = EXERCISES.filter((e) => ['bench_press', 'deadlift', 'squat', 'pull_up', 'hip_thrust'].includes(e.id));
 
   return (
     <Screen>
-      <Title>
-        {`Hey ${user?.name ?? 'Athlete'} 👋`}
-      </Title>
+      {/* header */}
+      <View style={styles.header}>
+        <View style={styles.avatar}>
+          <Text style={{ fontSize: 20 }}>🏋️</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.greet}>{greeting()}</Text>
+          <Text style={styles.name}>{user?.name ?? 'Athlete'}</Text>
+        </View>
+        <Pressable style={styles.iconBtn} onPress={() => store.setTab('coach')}>
+          <Text style={{ fontSize: 15 }}>💬</Text>
+        </Pressable>
+        <Pressable style={styles.iconBtn} onPress={() => store.setTab('recovery')}>
+          <Text style={{ fontSize: 15 }}>🔔</Text>
+        </Pressable>
+      </View>
 
-      <Card accent>
-        <H1>Today's readiness</H1>
-        <Row style={{ marginBottom: spacing(1) }}>
-          <Body style={{ fontSize: 34, fontWeight: '800', color: readiness.score >= 60 ? colors.primary : colors.warn }}>
-            {`${readiness.score}`}
-          </Body>
-          <Body dim>/ 100</Body>
+      {/* gradient hero */}
+      <GradientCard onPress={() => store.setTab('workout')}>
+        <Row style={{ justifyContent: 'space-between' }}>
+          <View style={{ flex: 1, paddingRight: spacing(1) }}>
+            <Text style={styles.heroTitle}>{'My Plan\nFor Today'}</Text>
+            <Text style={styles.heroSub}>
+              {data.plan ? `${done}/${planned} Complete` : 'Tap to start your first workout'}
+            </Text>
+          </View>
+          <Ring size={96} stroke={11} pct={Math.max(4, pct)} color="#FFD166" trackColor="rgba(255,255,255,0.25)">
+            <Text style={styles.heroPct}>
+              {pct}
+              <Text style={{ fontSize: 13 }}>%</Text>
+            </Text>
+          </Ring>
         </Row>
-        <ProgressBar pct={readiness.score} color={readiness.score >= 60 ? colors.primary : colors.warn} />
-        <Body dim style={{ marginTop: spacing(1) }}>{readiness.advice}</Body>
-      </Card>
+      </GradientCard>
 
-      <Row style={{ gap: spacing(1), marginBottom: spacing(1.5) }}>
-        <Stat label="workouts this week" value={`${stats.workouts}`} />
-        <Stat label="total volume (kg)" value={`${Math.round(stats.volume).toLocaleString()}`} />
-        <Stat label="reps counted" value={`${stats.reps}`} />
+      {/* readiness / burn tiles */}
+      <Row style={{ gap: spacing(1.25), marginBottom: spacing(1) }}>
+        <StatTile label="Readiness" value={`${readiness.score}`} unit="/100" emoji="⚡" tint={colors.tintPurple} />
+        <StatTile label="Burned" value={`${weekKcal}`} unit="kcal this week" emoji="🔥" tint={colors.tintOrange} />
       </Row>
 
-      <Card>
-        <H1>{nextDay ? `Next up: ${nextDay.name}` : 'No training plan yet'}</H1>
-        {nextDay ? (
-          <>
-            <Body dim style={{ marginBottom: spacing(1) }}>
-              {`${nextDay.focus} · ${nextDay.exercises.length} exercises`}
-            </Body>
-            <Body style={{ marginBottom: spacing(1.5) }}>
-              {nextDay.exercises.map((e) => e.name).join('  ·  ')}
-            </Body>
-            <Button title="Start workout →" onPress={() => store.setTab('workout')} />
-          </>
-        ) : (
-          <>
-            <Body dim style={{ marginBottom: spacing(1.5) }}>
-              Generate a personalized program for your goal and I'll run every session — camera tracking, rep
-              counting, live coaching.
-            </Body>
-            <Button title="Create my plan" onPress={() => store.setTab('plan')} />
-          </>
-        )}
-      </Card>
+      {/* start new goal */}
+      <SectionHeader title="Start new goal" actionLabel="See all" onAction={() => store.setTab('workout')} />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing(1) }}>
+        {goalCards.map((e) => {
+          const m = metaFor(e.id);
+          const img = exerciseImage(e.id);
+          return (
+            <Pressable key={e.id} style={styles.goalCard} onPress={() => store.setTab('workout')}>
+              <View style={[styles.goalThumb, { backgroundColor: m.tint, overflow: 'hidden' }]}>
+                {img ? (
+                  <Image source={img} style={{ position: 'absolute', width: '100%', height: '100%' }} resizeMode="cover" />
+                ) : (
+                  <Text style={{ fontSize: 42 }}>{m.emoji}</Text>
+                )}
+                <View style={styles.goalPlay}>
+                  <Text style={{ color: '#0A0A0E', fontSize: 12, fontWeight: '900', marginLeft: 1 }}>▶</Text>
+                </View>
+              </View>
+              <Text style={styles.goalTitle}>{e.name}</Text>
+              <Text style={styles.goalBlurb}>{m.blurb}</Text>
+              <Row style={{ gap: spacing(1.5), marginTop: 7 }}>
+                <Text style={[styles.goalMeta, { color: colors.green }]}>🕐 35 min</Text>
+                <Text style={[styles.goalMeta, { color: colors.amber }]}>🔥 {m.kcalPerMin * 15} cal</Text>
+              </Row>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
 
-      <Card>
-        <H1>Recovery</H1>
-        <Body style={{ marginBottom: spacing(0.5) }}>{rec.headline}</Body>
-        <Body dim>{rec.details[0]}</Body>
-        <Row style={{ marginTop: spacing(1.5) }}>
-          <Button title="Recovery details" kind="ghost" small onPress={() => store.setTab('recovery')} />
-          <Button title="Ask your coach" kind="ghost" small onPress={() => store.setTab('coach')} />
-        </Row>
-      </Card>
-
-      {data.logs.length > 0 && (
-        <Card>
-          <H1>Last session</H1>
-          {(() => {
-            const last = data.logs[data.logs.length - 1];
-            return (
-              <>
-                <Body dim style={{ marginBottom: spacing(0.5) }}>
-                  {`${new Date(last.date).toLocaleDateString()} · ${last.durationMin} min · ${Math.round(last.totalVolumeKg)} kg volume${last.avgHr ? ` · avg HR ${last.avgHr}` : ''}`}
-                </Body>
-                {last.exercises.map((e) => (
-                  <Body key={e.exerciseId} style={{ marginTop: 4 }}>
-                    {`• ${e.name}: ${e.sets.map((s) => `${s.reps}×${s.weightKg > 0 ? `${s.weightKg}kg` : 'BW'}`).join(', ')}`}
-                  </Body>
-                ))}
-              </>
-            );
-          })()}
-        </Card>
+      {/* today tasks */}
+      <SectionHeader title="Today task" actionLabel="See all" onAction={() => store.setTab('plan')} />
+      {nextDay ? (
+        nextDay.exercises.map((e) => {
+          const m = metaFor(e.exerciseId);
+          return (
+            <TaskRow
+              key={e.exerciseId}
+              emoji={m.emoji}
+              emojiTint={m.tint}
+              image={exerciseImage(e.exerciseId)}
+              title={e.name}
+              meta={`🕐 ${e.sets.length} sets × ${e.sets[0].targetReps}   🔥 ${m.kcalPerMin * 5 * e.sets.length} cal`}
+              onPlay={() => store.setTab('workout')}
+            />
+          );
+        })
+      ) : (
+        <TaskRow
+          emoji="📋"
+          emojiTint={colors.tintPurple}
+          title="Create your training plan"
+          meta="Personalized program for your goal"
+          onPlay={() => store.setTab('plan')}
+        />
       )}
 
-      <View style={{ height: spacing(2) }} />
+      {readiness.score < 60 && (
+        <Body dim style={{ marginTop: spacing(0.5) }}>{`⚡ ${readiness.advice}`}</Body>
+      )}
     </Screen>
   );
 };
+
+const styles = StyleSheet.create({
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing(1.5),
+    marginBottom: spacing(2),
+    marginTop: spacing(0.5),
+  },
+  avatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: colors.tintPurple,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  greet: { color: colors.textDim, fontSize: font.small + 1 },
+  name: { color: colors.text, fontSize: font.h1 + 1, fontWeight: '800' },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroTitle: { color: '#fff', fontSize: 24, fontWeight: '800', lineHeight: 30, marginBottom: spacing(1) },
+  heroSub: { color: 'rgba(255,255,255,0.85)', fontSize: font.small + 1.5, fontWeight: '600' },
+  heroPct: { color: '#fff', fontSize: 24, fontWeight: '800' },
+  goalCard: {
+    width: 200,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing(1.25),
+    marginRight: spacing(1.25),
+  },
+  goalThumb: {
+    height: 110,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing(1.25),
+  },
+  goalPlay: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  goalTitle: { color: colors.text, fontSize: font.h2, fontWeight: '800', marginBottom: 3 },
+  goalBlurb: { color: colors.textDim, fontSize: font.small + 0.5 },
+  goalMeta: { fontSize: font.small + 0.5, fontWeight: '700' },
+});

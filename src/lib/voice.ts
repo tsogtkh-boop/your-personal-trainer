@@ -96,15 +96,42 @@ export function setSpeechEnabled(on: boolean): void {
   if (!on) (globalThis as any).speechSynthesis?.cancel();
 }
 
+export type VoiceGender = 'female' | 'male';
+let voiceGender: VoiceGender = 'female';
+export function setVoiceGender(g: VoiceGender): void {
+  voiceGender = g;
+}
+
+// Web Speech voices don't expose a reliable gender field, so match on the
+// well-known platform voice names (macOS, Windows, Chrome/Google).
+const FEMALE_NAMES =
+  /samantha|victoria|karen|moira|tessa|fiona|female|zira|susan|allison|ava|serena|catherine|kate|linda|heather|hazel|amelie|nicky|google us english|google uk english female/i;
+const MALE_NAMES =
+  /daniel|alex|fred|aaron|\bmale\b|david|mark|oliver|rishi|\btom\b|george|arthur|gordon|guy|reed|bruce|junior|ralph|albert|google uk english male/i;
+
+function pickVoice(synth: any): any | null {
+  const voices: any[] = synth.getVoices?.() ?? [];
+  if (!voices.length) return null;
+  const en = voices.filter((v) => /^en[-_]/i.test(v.lang));
+  const pool = en.length ? en : voices;
+  const want = voiceGender === 'male' ? MALE_NAMES : FEMALE_NAMES;
+  const avoid = voiceGender === 'male' ? FEMALE_NAMES : MALE_NAMES;
+  return (
+    pool.find((v) => want.test(v.name)) ||
+    pool.find((v) => !avoid.test(v.name)) || // at least avoid the opposite gender
+    pool[0]
+  );
+}
+
 export function speak(text: string, opts: { rate?: number; interrupt?: boolean } = {}): void {
   const synth = (globalThis as any).speechSynthesis;
   if (!voiceEnabled || !synth) return;
   if (opts.interrupt) synth.cancel();
   const u = new (globalThis as any).SpeechSynthesisUtterance(text);
   u.rate = opts.rate ?? 1.04;
-  u.pitch = 1.0;
-  const voices = synth.getVoices?.() ?? [];
-  const preferred = voices.find((v: any) => /en[-_]/i.test(v.lang) && /google|samantha|daniel/i.test(v.name));
+  // Nudge pitch by gender — helps when the platform only ships one voice.
+  u.pitch = voiceGender === 'male' ? 0.85 : 1.08;
+  const preferred = pickVoice(synth);
   if (preferred) u.voice = preferred;
   synth.speak(u);
 }

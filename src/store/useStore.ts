@@ -54,7 +54,13 @@ interface AppState {
   currentEmail: string | null;
   userData: Record<string, PerUserData>;
   tab: Tab;
-  settings: { voiceEnabled: boolean; claudeApiKey: string; demoMode: boolean };
+  settings: {
+    voiceEnabled: boolean;
+    claudeApiKey: string;
+    demoMode: boolean;
+    units: 'metric' | 'imperial';
+    voiceGender: 'female' | 'male';
+  };
   hydrated: boolean;
 
   // derived helpers
@@ -86,7 +92,7 @@ export const useStore = create<AppState>()(
       currentEmail: null,
       userData: {},
       tab: 'home',
-      settings: { voiceEnabled: true, claudeApiKey: '', demoMode: true },
+      settings: { voiceEnabled: true, claudeApiKey: '', demoMode: true, units: 'metric', voiceGender: 'female' },
       hydrated: false,
 
       currentUser: () => {
@@ -231,6 +237,16 @@ export const useStore = create<AppState>()(
     {
       name: 'your-personal-trainer',
       storage: createJSONStorage(() => AsyncStorage),
+      // Deep-merge settings so new keys (units, voiceGender) fall back to defaults
+      // for users who signed up before those settings existed.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<AppState>;
+        return {
+          ...current,
+          ...p,
+          settings: { ...current.settings, ...(p.settings ?? {}) },
+        };
+      },
       onRehydrateStorage: () => (state) => {
         state && useStore.setState({ hydrated: true });
       },

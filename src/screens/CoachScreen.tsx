@@ -57,6 +57,7 @@ export const CoachScreen: React.FC = () => {
       mealPlan: data.mealPlan,
       logs: data.logs,
       recovery: data.recovery,
+      units: store.settings.units,
     };
 
     let reply: string;
