@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Text, View } from 'react-native';
+import { Image, Platform, Text, View } from 'react-native';
 import { Body, Button, Card, Chip, H1, ProgressBar, Row, Screen, Stat, Title } from '../components/UI';
 import { colors, spacing } from '../theme';
 import { useStore } from '../store/useStore';
 import { EXERCISES, ExerciseDef, exerciseById } from '../lib/exercises';
 import { RepCounter } from '../lib/repCounter';
 import { toPoseMap, KP } from '../lib/geometry';
-import { PoseEngine, PoseSimulator, drawSkeleton } from '../lib/poseEngine';
+import { PoseEngine, PoseSimulator } from '../lib/poseEngine';
 import { VoiceControl, VoiceCommand, speak, setSpeechEnabled, voiceSupported } from '../lib/voice';
-import { demoVideoUri } from '../lib/demoMedia';
+import { demoVideoUri, exerciseImage } from '../lib/demoMedia';
+import { metaFor } from '../lib/exerciseMeta';
 import { displayWeight, kgToLb, weightUnit } from '../lib/units';
 import { HeartRateMonitor, bluetoothSupported, hrZone, restRecommendation } from '../lib/bluetoothHR';
 import { adaptNextSet, setFatigueScore } from '../lib/fatigue';
@@ -46,7 +47,6 @@ export const WorkoutScreen: React.FC = () => {
 
   // ---- live state ----
   const [reps, setReps] = useState(0);
-  const [angle, setAngle] = useState<number | null>(null);
   const [feedback, setFeedback] = useState('Get in position…');
   const [formScore, setFormScore] = useState(100);
   const [hr, setHr] = useState<number | null>(null);
@@ -75,7 +75,6 @@ export const WorkoutScreen: React.FC = () => {
   const phaseRef = useRef<Phase>('setup');
   const stageRef = useRef<any>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const setStartRef = useRef(0);
   const workoutStartRef = useRef(0);
   const logsRef = useRef<ExerciseLog[]>([]);
@@ -155,7 +154,6 @@ export const WorkoutScreen: React.FC = () => {
     if (!counter) return;
     const st = counter.update(m, Date.now() / 1000);
     setReps(st.reps);
-    setAngle(st.angle);
     setFormScore(st.formScore);
     if (st.feedback) {
       setFeedback(st.feedback);
@@ -166,33 +164,22 @@ export const WorkoutScreen: React.FC = () => {
     if (st.reps >= target) finishSet();
   };
 
-  const drawKps = (kps: KP[]) => {
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) drawSkeleton(ctx, kps, canvas.width, canvas.height, 1, 1);
-    }
-  };
-
-  // From MoveNet (live camera or real-athlete video): draw the detected skeleton,
-  // and count from it unless we've handed counting to the synthetic cadence.
+  // From MoveNet (live camera or real-athlete video): count reps from the pose,
+  // unless we've handed counting to the synthetic cadence. No overlay is drawn.
   const onPoseFrame = useCallback((kps: KP[]) => {
     if (phaseRef.current !== 'active') return;
-    drawKps(kps);
     if (!syntheticCountRef.current) feedCounter(toPoseMap(kps));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Pure simulator (exercises with no demo clip): synthetic skeleton drives both.
+  // Pure simulator (exercises with no demo clip): drives the rep counter only.
   const onSimFrame = useCallback((kps: KP[]) => {
     if (phaseRef.current !== 'active') return;
-    drawKps(kps);
     feedCounter(toPoseMap(kps));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Hybrid: keep the real athlete video on screen, but drive rep cadence
-  // synthetically (no skeleton drawn over the real footage).
+  // Hybrid: real athlete video on screen, rep cadence driven synthetically.
   const onSyntheticCountFrame = useCallback((kps: KP[]) => {
     if (phaseRef.current !== 'active') return;
     feedCounter(toPoseMap(kps));
@@ -206,33 +193,20 @@ export const WorkoutScreen: React.FC = () => {
   const onSyntheticCountFrameRef = useRef(onSyntheticCountFrame);
   onSyntheticCountFrameRef.current = onSyntheticCountFrame;
 
-  /** Create the DOM video/canvas elements early so tracking can start before the mount effect runs. */
+  /** Create the DOM video element early so tracking can start before the mount effect runs. */
   const ensureStageEls = () => {
     if (Platform.OS !== 'web') return;
     if (!videoRef.current) {
       const video = document.createElement('video');
       video.muted = true;
       video.playsInline = true;
-      video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;';
+      video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;';
       videoRef.current = video;
-    }
-    if (!canvasRef.current) {
-      const canvas = document.createElement('canvas');
-      canvas.width = 640;
-      canvas.height = 480;
-      canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
-      canvasRef.current = canvas;
     }
   };
 
   const configureStage = (srcW: number, srcH: number, mirror: boolean, showVideo: boolean) => {
     const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (canvas) {
-      canvas.width = srcW;
-      canvas.height = srcH;
-      canvas.style.transform = mirror ? 'scaleX(-1)' : 'none';
-    }
     if (video) {
       video.style.transform = mirror ? 'scaleX(-1)' : 'none';
       video.style.display = showVideo ? 'block' : 'none';
@@ -265,9 +239,6 @@ export const WorkoutScreen: React.FC = () => {
   // Keep the real athlete video playing & visible, but count reps synthetically.
   const startHybridCounting = (def: ExerciseDef) => {
     syntheticCountRef.current = true;
-    // clear any stale skeleton drawn over the real footage
-    const canvas = canvasRef.current;
-    if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
     startSimInterval(def, (kps) => onSyntheticCountFrameRef.current(kps));
   };
 
@@ -671,16 +642,14 @@ export const WorkoutScreen: React.FC = () => {
     }
   };
 
-  // mount video/canvas into the stage div (web only)
+  // mount the video element into the stage div (web only)
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const host: HTMLElement | null = stageRef.current as any;
     if (!host || phase === 'setup' || phase === 'summary') return;
     ensureStageEls();
     const video = videoRef.current!;
-    const canvas = canvasRef.current!;
     if (video.parentElement !== host) host.appendChild(video);
-    if (canvas.parentElement !== host) host.appendChild(canvas);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
@@ -832,13 +801,23 @@ export const WorkoutScreen: React.FC = () => {
           position: 'relative',
         }}
       >
+        {/* placeholder visual for exercises with no demo clip (photo, else emoji) */}
+        {demoSource === 'sim' && def && (
+          <View style={{ position: 'absolute', inset: 0 as any, alignItems: 'center', justifyContent: 'center', zIndex: 1 }}>
+            {exerciseImage(def.id) ? (
+              <Image source={exerciseImage(def.id)} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+            ) : (
+              <>
+                <Text style={{ fontSize: 96 }}>{metaFor(def.id).emoji}</Text>
+                <Text style={{ color: colors.textDim, fontSize: 14, marginTop: spacing(1) }}>{def.name}</Text>
+              </>
+            )}
+          </View>
+        )}
         {(demoSource || cameraError) && (
           <View style={{ position: 'absolute', top: 8, left: 8, zIndex: 5, backgroundColor: '#0009', borderRadius: 8, padding: 6, maxWidth: '70%' }}>
             <Text style={{ color: colors.textDim, fontSize: 12 }}>
-              {cameraError ??
-                (demoSource === 'video'
-                  ? '🎬 real athlete demo'
-                  : '🎮 demo mode — simulated athlete')}
+              {cameraError ?? (demoSource === 'video' ? '🎬 real athlete demo' : '🎮 demo mode')}
             </Text>
           </View>
         )}
@@ -854,11 +833,6 @@ export const WorkoutScreen: React.FC = () => {
           </Text>
           <Text style={{ color: colors.text, fontSize: 14, marginTop: -8 }}>{`/ ${targetReps} reps`}</Text>
         </View>
-        {angle !== null && (
-          <View style={{ position: 'absolute', left: 12, bottom: 10, zIndex: 5 }}>
-            <Text style={{ color: colors.textDim, fontSize: 12 }}>{`joint angle ${Math.round(angle)}°`}</Text>
-          </View>
-        )}
       </View>
 
       {/* live feedback strip */}
