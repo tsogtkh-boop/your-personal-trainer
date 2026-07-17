@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "expo-web",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PATH=\"$HOME/.local/node/node-v22.14.0-darwin-x64/bin:$PATH\" npx expo start --web --port 8081"
+      ],
+      "port": 8081
+    }
+  ]
+}

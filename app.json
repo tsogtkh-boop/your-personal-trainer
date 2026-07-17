@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "trainer-scaffold",
-    "slug": "trainer-scaffold",
+    "name": "Your Personal Trainer",
+    "slug": "your-personal-trainer",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
