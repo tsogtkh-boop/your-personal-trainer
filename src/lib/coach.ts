@@ -3,7 +3,6 @@
 //  2. Optional Claude API coach — if the user adds an API key in Profile,
 //     replies come from Claude with full training context.
 
-import Anthropic from '@anthropic-ai/sdk';
 import { MealPlan, RecoveryEntry, TrainingPlan, UserProfile, WorkoutLog } from '../types';
 import { DEFAULT_EXERCISES } from './exercises';
 import { analyzeRecovery } from './recovery';
@@ -133,21 +132,39 @@ function buildSystemPrompt(ctx: CoachContext): string {
   ].join('\n');
 }
 
+// Direct REST call to the Anthropic Messages API. We use fetch rather than the
+// official SDK so the app bundles for native (Expo Go): the SDK pulls in
+// `node:fs`, which Metro can't resolve for iOS/Android. The
+// `anthropic-dangerous-direct-browser-access` header enables the client-side
+// call from the web build too.
 export async function claudeCoachReply(
   apiKey: string,
   ctx: CoachContext,
   history: { role: 'user' | 'assistant'; content: string }[],
 ): Promise<string> {
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-  const response = await client.messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 1024,
-    system: buildSystemPrompt(ctx),
-    messages: history,
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-opus-4-8',
+      max_tokens: 1024,
+      system: buildSystemPrompt(ctx),
+      messages: history,
+    }),
   });
-  const text = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status} ${detail.slice(0, 200)}`);
+  }
+  const data: { content?: { type: string; text?: string }[] } = await res.json();
+  const text = (data.content ?? [])
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text ?? '')
     .join('\n');
   return text || 'Hmm, I lost my train of thought — ask me again?';
 }
