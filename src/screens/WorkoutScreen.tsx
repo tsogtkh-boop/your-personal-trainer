@@ -7,6 +7,7 @@ import { Exercise } from '../lib/exercises';
 import { KP, toPoseMap } from '../lib/geometry';
 import { SmartCoach } from '../lib/smartCoach';
 import { PoseEngine } from '../lib/poseEngine';
+import { CoachCamera } from '../components/CoachCamera';
 import { VoiceControl, VoiceCommand, speak, setSpeechEnabled, voiceSupported } from '../lib/voice';
 import { displayWeight, kgToLb, parseWeightToKg, weightUnit } from '../lib/units';
 import { ManualLogScreen } from './ManualLogScreen';
@@ -62,6 +63,8 @@ export const WorkoutScreen: React.FC = () => {
   const [voiceOn, setVoiceOn] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [engineLoading, setEngineLoading] = useState(false);
+  // native only: whether the vision-camera coach component is mounted
+  const [cameraActive, setCameraActive] = useState(false);
   const [manualMode, setManualMode] = useState(false);
   // what you actually did this set (typed) — logged alongside the form grade
   const [weightInput, setWeightInput] = useState('');
@@ -222,8 +225,12 @@ export const WorkoutScreen: React.FC = () => {
   // The loop only feeds the coach while a set is active (see onPoseFrame).
   const openCameraLoop = async (): Promise<boolean> => {
     if (Platform.OS !== 'web') {
-      setCameraError('Camera coaching runs in the web build. Open the app in a browser to be coached.');
-      return false;
+      // Native: mount the vision-camera coach. Permission/model readiness and
+      // failures come back asynchronously via the component's onError/onReady.
+      setEngineLoading(true);
+      setCameraError(null);
+      setCameraActive(true);
+      return true;
     }
     ensureVideoEl();
     try {
@@ -251,7 +258,21 @@ export const WorkoutScreen: React.FC = () => {
 
   const stopTracking = () => {
     engineRef.current?.stop();
+    if (Platform.OS !== 'web') setCameraActive(false);
   };
+
+  // native camera callbacks (no-ops on web, where the component never mounts)
+  const onCameraReady = useCallback(() => {
+    setEngineLoading(false);
+    setCameraError(null);
+  }, []);
+  const onCameraError = useCallback((message: string) => {
+    setEngineLoading(false);
+    setCameraActive(false);
+    setCameraError(message);
+    abortToSetup();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const abortToSetup = () => {
     stopTracking();
@@ -752,6 +773,15 @@ export const WorkoutScreen: React.FC = () => {
           position: 'relative',
         }}
       >
+        {Platform.OS !== 'web' && cameraActive && (
+          <CoachCamera
+            active={phase === 'active'}
+            onPose={(kps) => onPoseFrameRef.current(kps)}
+            onReady={onCameraReady}
+            onError={onCameraError}
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+          />
+        )}
         <View style={{ position: 'absolute', top: 10, left: 10, zIndex: 5, backgroundColor: '#0009', borderRadius: 8, padding: 6, maxWidth: '72%' }}>
           <Text style={{ color: colors.textDim, fontSize: 12 }}>📷 live camera · pose AI coaching</Text>
         </View>

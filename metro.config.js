@@ -8,4 +8,9 @@ if (!config.resolver.assetExts.includes('webm')) {
   config.resolver.assetExts.push('webm');
 }
 
+// Bundle TensorFlow Lite pose models as binary assets (native camera coaching).
+if (!config.resolver.assetExts.includes('tflite')) {
+  config.resolver.assetExts.push('tflite');
+}
+
 module.exports = config;

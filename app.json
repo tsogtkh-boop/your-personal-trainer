@@ -22,7 +22,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-asset"
+      "expo-asset",
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "Your Personal Trainer needs camera access to coach your form in real time. Video never leaves your device.",
+          "enableFrameProcessors": true
+        }
+      ]
     ],
     "experiments": {
       "baseUrl": "/your-personal-trainer/"
