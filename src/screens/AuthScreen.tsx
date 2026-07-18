@@ -68,7 +68,7 @@ export const AuthScreen: React.FC = () => {
       <View style={{ alignItems: 'center', marginTop: spacing(3), marginBottom: spacing(2) }}>
         <Text style={{ fontSize: 44 }}>🏋️</Text>
         <Title>Your Personal Trainer</Title>
-        <Body dim>AI coaching · camera rep tracking · adaptive plans</Body>
+        <Body dim>AI form coaching · live camera · adaptive plans</Body>
       </View>
 
       <Card>
