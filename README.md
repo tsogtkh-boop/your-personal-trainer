@@ -37,12 +37,12 @@ builds fall back to demo tracking).
 | **Recovery & sleep analysis** | Recovery score from sleep, HRV, resting HR and soreness; 7-day trend; feeds directly into workout intensity. |
 | **Accounts & subscriptions** | Local accounts (SHA-256 hashed passwords), Free/Pro/Elite tiers with a free-tier workout limit and simulated checkout. |
 
-## Trying it without a camera
+## Using the camera coach
 
-Pick **🎮 Demo (no camera)** on the Workout tab — the coach runs on a simulated athlete moving through
-each exercise's range of motion, so you hear exactly how it coaches technique (posture, symmetry, range,
-tempo) end-to-end. Pick **📷 Live camera coach** and grant camera access for real coaching: stand back so
-your full body is visible, side-on for squats/presses/deadlifts.
+The workout is camera-only — grant camera access when you start a set. Stand back so your whole body is
+in frame, side-on for squats, presses and deadlifts. All pose processing runs on-device (TensorFlow.js
+MoveNet); nothing is uploaded. If camera access is denied, the app tells you the camera is required and
+returns you to the setup screen rather than faking a session.
 
 ## Project layout
 
@@ -53,7 +53,7 @@ src/
     exercises.ts             serializable exercise model + 14 built-in defaults (tracked joint, posture, cues)
     smartCoach.ts            the camera coach — posture, symmetry, range, tempo, stability → live cues + grade
     geometry.ts              joint-angle & symmetry math over MoveNet keypoints
-    poseEngine.ts            MoveNet loader, webcam loop, no-camera pose simulator
+    poseEngine.ts            MoveNet loader + webcam pose-detection loop
     voice.ts                 Web Speech recognition (commands) + speech synthesis (male/female coach voice)
     bluetoothHR.ts           Web Bluetooth HR service, HR zones, HR-guided rest logic
     fatigue.ts               form-based set fatigue, next-set adaptation, daily readiness

@@ -6,7 +6,7 @@ import { useStore } from '../store/useStore';
 import { Exercise } from '../lib/exercises';
 import { KP, toPoseMap } from '../lib/geometry';
 import { SmartCoach } from '../lib/smartCoach';
-import { PoseEngine, PoseSimulator } from '../lib/poseEngine';
+import { PoseEngine } from '../lib/poseEngine';
 import { VoiceControl, VoiceCommand, speak, setSpeechEnabled, voiceSupported } from '../lib/voice';
 import { displayWeight, kgToLb, weightUnit } from '../lib/units';
 import { HeartRateMonitor, bluetoothSupported, hrZone, restRecommendation } from '../lib/bluetoothHR';
@@ -44,7 +44,6 @@ export const WorkoutScreen: React.FC = () => {
   });
   const [exIdx, setExIdx] = useState(0);
   const [setIdx, setSetIdx] = useState(0);
-  const [useCamera, setUseCamera] = useState(true);
 
   // ---- live coaching state ----
   const [formScore, setFormScore] = useState(100);
@@ -62,13 +61,10 @@ export const WorkoutScreen: React.FC = () => {
   const [voiceOn, setVoiceOn] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [engineLoading, setEngineLoading] = useState(false);
-  const [demoMode, setDemoMode] = useState(false);
 
   // ---- refs ----
   const coachRef = useRef<SmartCoach | null>(null);
   const engineRef = useRef<PoseEngine | null>(null);
-  const simRef = useRef<PoseSimulator | null>(null);
-  const simTimerRef = useRef<any>(null);
   const restTimerRef = useRef<any>(null);
   const elapsedTimerRef = useRef<any>(null);
   const hrRef = useRef<HeartRateMonitor | null>(null);
@@ -115,15 +111,20 @@ export const WorkoutScreen: React.FC = () => {
     beginSession(null, [{ ex, sets }]);
   };
 
-  const beginSession = (dayName: string | null, exercises: { ex: Exercise; sets: LiveSetPlan[] }[]) => {
+  const beginSession = async (dayName: string | null, exercises: { ex: Exercise; sets: LiveSetPlan[] }[]) => {
     logsRef.current = exercises.map((e) => ({ exerciseId: e.ex.id, name: e.ex.name, sets: [] }));
     workoutStartRef.current = Date.now();
     allHrRef.current = [];
-    setDemoMode(!useCamera);
     setSession({ dayName, exercises });
     setExIdx(0);
     setSetIdx(0);
-    startSet(exercises[0].ex);
+    startSet(exercises[0].ex); // renders the stage so the camera can attach
+
+    const ok = await openCameraLoop();
+    if (!ok) {
+      abortToSetup();
+      return;
+    }
     startHeartRate();
     startVoice();
     const first = exercises[0];
@@ -149,7 +150,6 @@ export const WorkoutScreen: React.FC = () => {
     setPhase('active');
     hrRef.current?.setSimulatedLoad(0.8);
     startElapsed();
-    startTracking(ex);
   };
 
   const startElapsed = () => {
@@ -201,56 +201,55 @@ export const WorkoutScreen: React.FC = () => {
     }
   };
 
-  const startSimulator = (ex: Exercise) => {
-    engineRef.current?.stop();
-    if (simTimerRef.current) clearInterval(simTimerRef.current);
-    if (videoRef.current) videoRef.current.style.display = 'none';
-    setDemoMode(true);
-    simRef.current = new PoseSimulator(ex);
-    let last = Date.now();
-    simTimerRef.current = setInterval(() => {
-      if (phaseRef.current !== 'active') return;
-      const now = Date.now();
-      const dt = (now - last) / 1000;
-      last = now;
-      onPoseFrameRef.current(simRef.current!.tick(dt));
-    }, 60);
-  };
-
-  const startTracking = async (ex: Exercise) => {
-    stopTracking();
-    ensureVideoEl();
-    if (useCamera && Platform.OS === 'web') {
-      try {
-        setEngineLoading(true);
-        if (!engineRef.current) {
-          engineRef.current = new PoseEngine();
-          await engineRef.current.init(videoRef.current!);
-        }
-        await engineRef.current.openCamera();
-        if (videoRef.current) videoRef.current.style.display = 'block';
-        setDemoMode(false);
-        setCameraError(null);
-        engineRef.current.start((kps) => onPoseFrameRef.current(kps));
-        setEngineLoading(false);
-        return;
-      } catch (err: any) {
-        setEngineLoading(false);
-        setCameraError(`Camera unavailable (${err?.message ?? 'denied'}) — coaching a simulated athlete instead.`);
-      }
+  // Open the webcam + start the continuous pose-detection loop for the session.
+  // The loop only feeds the coach while a set is active (see onPoseFrame).
+  const openCameraLoop = async (): Promise<boolean> => {
+    if (Platform.OS !== 'web') {
+      setCameraError('Camera coaching runs in the web build. Open the app in a browser to be coached.');
+      return false;
     }
-    startSimulator(ex);
+    ensureVideoEl();
+    try {
+      setEngineLoading(true);
+      if (!engineRef.current) {
+        engineRef.current = new PoseEngine();
+        await engineRef.current.init(videoRef.current!);
+      }
+      await engineRef.current.openCamera();
+      if (videoRef.current) videoRef.current.style.display = 'block';
+      setCameraError(null);
+      engineRef.current.start((kps) => onPoseFrameRef.current(kps));
+      setEngineLoading(false);
+      return true;
+    } catch (err: any) {
+      setEngineLoading(false);
+      setCameraError(
+        `I need your camera to coach your form (${err?.message ?? 'permission denied'}). Allow camera access, then start again.`,
+      );
+      engineRef.current?.dispose();
+      engineRef.current = null;
+      return false;
+    }
   };
 
   const stopTracking = () => {
-    if (simTimerRef.current) clearInterval(simTimerRef.current);
-    simTimerRef.current = null;
     engineRef.current?.stop();
+  };
+
+  const abortToSetup = () => {
+    stopTracking();
+    if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+    if (restTimerRef.current) clearInterval(restTimerRef.current);
+    stopVoice();
+    hrRef.current?.disconnect();
+    hrRef.current = null;
+    setHr(null);
+    setSession({ dayName: null, exercises: [] });
+    setPhase('setup');
   };
 
   const finishSet = (viaVoice = false) => {
     if (phaseRef.current !== 'active') return;
-    stopTracking();
     if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
     hrRef.current?.setSimulatedLoad(0.3);
     const coach = coachRef.current!;
@@ -368,7 +367,6 @@ export const WorkoutScreen: React.FC = () => {
       finishWorkout();
       return;
     }
-    stopTracking();
     if (restTimerRef.current) clearInterval(restTimerRef.current);
     const ne = e + 1;
     setExIdx(ne);
@@ -425,9 +423,10 @@ export const WorkoutScreen: React.FC = () => {
   };
 
   // ------------------------------------------------------------------ pause / adjust
+  // The camera loop keeps running; the phase guard in onPoseFrame stops coaching
+  // while paused, so we don't drop (and re-prompt) the camera stream.
   const pauseWorkout = () => {
     if (phaseRef.current !== 'active') return;
-    stopTracking();
     if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
     setPhase('paused');
     hrRef.current?.setSimulatedLoad(0.2);
@@ -436,11 +435,9 @@ export const WorkoutScreen: React.FC = () => {
 
   const resumeWorkout = () => {
     if (phaseRef.current !== 'paused') return;
-    const { exIdx: e } = idxRef.current;
     setPhase('active');
     hrRef.current?.setSimulatedLoad(0.8);
     startElapsed();
-    startTracking(sessionRef.current.exercises[e].ex);
     speak("Back at it — let's go.");
   };
 
@@ -587,17 +584,16 @@ export const WorkoutScreen: React.FC = () => {
         )}
         {!gated && (
           <>
-            <Card accent>
-              <H1>Coaching mode</H1>
-              <Row style={{ flexWrap: 'wrap', marginBottom: spacing(1) }}>
-                <Chip label="📷 Live camera coach" active={useCamera} onPress={() => setUseCamera(true)} />
-                <Chip label="🎮 Demo (no camera)" active={!useCamera} onPress={() => setUseCamera(false)} />
-              </Row>
+            <Card accent style={cameraError ? { borderColor: colors.warn } : undefined}>
+              <H1>📷 Live camera coach</H1>
               <Body dim>
-                {useCamera
-                  ? 'Your webcam + on-device MoveNet pose AI. Your coach watches your posture, alignment, symmetry, range of motion and tempo, and talks you through every set. Nothing is uploaded — it all stays in your browser.'
-                  : "No camera? The coach runs on a simulated athlete so you can hear exactly how it coaches technique — posture, symmetry, range and tempo — live."}
+                Your webcam + on-device MoveNet pose AI. Your coach watches your posture, alignment, symmetry,
+                range of motion and tempo, and talks you through every set. Nothing is uploaded — it all stays in
+                your browser. Stand back so your whole body is in frame, side-on for squats and presses.
               </Body>
+              {cameraError && (
+                <Body style={{ color: colors.warn, marginTop: spacing(1) }}>{`⚠ ${cameraError}`}</Body>
+              )}
             </Card>
 
             {planDay && (
@@ -679,7 +675,7 @@ export const WorkoutScreen: React.FC = () => {
         <Body dim>{`Set ${setIdx + 1}/${currentEx?.sets.length ?? 0} · Ex ${exIdx + 1}/${session.exercises.length}`}</Body>
       </Row>
 
-      {/* camera / demo stage */}
+      {/* live camera stage */}
       <View
         ref={stageRef}
         style={{
@@ -693,18 +689,8 @@ export const WorkoutScreen: React.FC = () => {
           position: 'relative',
         }}
       >
-        {(demoMode || cameraError) && (
-          <View style={{ position: 'absolute', inset: 0 as any, alignItems: 'center', justifyContent: 'center', zIndex: 1 }}>
-            <Text style={{ fontSize: 92 }}>{ex?.emoji ?? '🏋️'}</Text>
-            <Text style={{ color: colors.textDim, fontSize: 14, marginTop: spacing(1) }}>
-              {ex?.name} · simulated athlete
-            </Text>
-          </View>
-        )}
         <View style={{ position: 'absolute', top: 10, left: 10, zIndex: 5, backgroundColor: '#0009', borderRadius: 8, padding: 6, maxWidth: '72%' }}>
-          <Text style={{ color: colors.textDim, fontSize: 12 }}>
-            {cameraError ?? (demoMode ? '🎮 demo — coaching a simulated athlete' : '📷 live camera · pose AI coaching')}
-          </Text>
+          <Text style={{ color: colors.textDim, fontSize: 12 }}>📷 live camera · pose AI coaching</Text>
         </View>
         {engineLoading && (
           <View style={{ position: 'absolute', inset: 0 as any, alignItems: 'center', justifyContent: 'center', zIndex: 6 }}>
