@@ -1,22 +1,8 @@
 // Camera + pose detection engine (web). Uses TensorFlow.js MoveNet.
 import { KP } from './geometry';
+import { JOINT_TRIPLE, Posture, TrackedJoint } from './exercises';
 
 export type PoseCallback = (keypoints: KP[]) => void;
-
-const CONNECTIONS: [string, string][] = [
-  ['left_shoulder', 'right_shoulder'],
-  ['left_shoulder', 'left_elbow'],
-  ['left_elbow', 'left_wrist'],
-  ['right_shoulder', 'right_elbow'],
-  ['right_elbow', 'right_wrist'],
-  ['left_shoulder', 'left_hip'],
-  ['right_shoulder', 'right_hip'],
-  ['left_hip', 'right_hip'],
-  ['left_hip', 'left_knee'],
-  ['left_knee', 'left_ankle'],
-  ['right_hip', 'right_knee'],
-  ['right_knee', 'right_ankle'],
-];
 
 export class PoseEngine {
   private detector: any = null;
@@ -55,34 +41,6 @@ export class PoseEngine {
     await this.video.play();
   }
 
-  /** Play a prerecorded clip (real-athlete demo) and run pose detection on it. */
-  async openVideoFile(uri: string): Promise<void> {
-    if (!this.video) throw new Error('call init first');
-    if (this.stream) {
-      this.stream.getTracks().forEach((t) => t.stop());
-      this.stream = null;
-    }
-    this.video.srcObject = null;
-    this.video.crossOrigin = 'anonymous';
-    this.video.loop = true;
-    this.video.muted = true;
-    this.video.src = uri;
-    await new Promise<void>((resolve, reject) => {
-      const v = this.video!;
-      const onErr = () => reject(new Error('demo video failed to load'));
-      v.onloadeddata = () => resolve();
-      v.onerror = onErr;
-      setTimeout(onErr, 15000);
-    });
-    // Autoplay may be blocked until a user gesture — don't treat that as fatal;
-    // the clip is loaded and will play on the first interaction.
-    try {
-      await this.video.play();
-    } catch {
-      /* autoplay blocked — keep the loaded clip on screen anyway */
-    }
-  }
-
   start(onPose: PoseCallback): void {
     this.running = true;
     const loop = async () => {
@@ -115,126 +73,92 @@ export class PoseEngine {
   }
 }
 
-export function drawSkeleton(
-  ctx: CanvasRenderingContext2D,
-  kps: KP[],
-  width: number,
-  height: number,
-  scaleX = 1,
-  scaleY = 1,
-  color = '#22D3A5',
-): void {
-  ctx.clearRect(0, 0, width, height);
-  const map: Record<string, KP> = {};
-  for (const k of kps) if (k.name) map[k.name] = k;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
-  ctx.lineCap = 'round';
-  for (const [a, b] of CONNECTIONS) {
-    const ka = map[a];
-    const kb = map[b];
-    if (ka && kb && (ka.score ?? 1) > 0.3 && (kb.score ?? 1) > 0.3) {
-      ctx.beginPath();
-      ctx.moveTo(ka.x * scaleX, ka.y * scaleY);
-      ctx.lineTo(kb.x * scaleX, kb.y * scaleY);
-      ctx.stroke();
-    }
-  }
-  ctx.fillStyle = '#FFFFFF';
-  for (const k of kps) {
-    if ((k.score ?? 1) > 0.3) {
-      ctx.beginPath();
-      ctx.arc(k.x * scaleX, k.y * scaleY, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+// ---------------------------------------------------------------------------
+// Demo simulator: generates a synthetic pose whose tracked joint moves through
+// a plausible range of motion, so the SmartCoach can be demonstrated with no
+// camera. The keypoints are never drawn — they only feed the coach.
+// ---------------------------------------------------------------------------
+
+interface Pt {
+  x: number;
+  y: number;
 }
 
-// ---------------------------------------------------------------------------
-// Demo simulator: generates a synthetic skeleton moving through an exercise's
-// range of motion so rep counting / form feedback works with no camera.
-// ---------------------------------------------------------------------------
-
-const SIM_TRIPLES: Record<string, [string, string, string]> = {
-  squat: ['hip', 'knee', 'ankle'],
-  leg_extension: ['hip', 'knee', 'ankle'],
-  lunge: ['hip', 'knee', 'ankle'],
-  deadlift: ['shoulder', 'hip', 'knee'],
-  hip_thrust: ['shoulder', 'hip', 'knee'],
-  sit_up: ['shoulder', 'hip', 'knee'],
-  bench_press: ['shoulder', 'elbow', 'wrist'],
-  overhead_press: ['shoulder', 'elbow', 'wrist'],
-  bicep_curl: ['shoulder', 'elbow', 'wrist'],
-  pull_up: ['shoulder', 'elbow', 'wrist'],
-  push_up: ['shoulder', 'elbow', 'wrist'],
-  bent_over_row: ['shoulder', 'elbow', 'wrist'],
-  lateral_raise: ['elbow', 'shoulder', 'hip'],
-  jumping_jack: ['elbow', 'shoulder', 'hip'],
+const rotate = (u: Pt, deg: number): Pt => {
+  const r = (deg * Math.PI) / 180;
+  return { x: u.x * Math.cos(r) - u.y * Math.sin(r), y: u.x * Math.sin(r) + u.y * Math.cos(r) };
 };
 
-interface SimExercise {
-  bottomThreshold: number;
-  topThreshold: number;
-  startAt: 'high' | 'low';
-  id: string;
-}
+// which endpoint of the joint triple represents the moving limb
+const ANIMATE_A: Record<TrackedJoint, boolean> = { knee: false, elbow: false, hip: true, shoulder: true };
 
 export class PoseSimulator {
   private t = 0;
-  private repPeriodSec: number;
-  private ex: SimExercise;
+  private period = 2.6;
+  private joint: TrackedJoint;
+  private posture: Posture;
 
-  constructor(ex: SimExercise, repPeriodSec = 3.2) {
-    this.ex = ex;
-    this.repPeriodSec = repPeriodSec;
+  constructor(ex: { trackedJoint: TrackedJoint; posture: Posture }) {
+    this.joint = ex.trackedJoint;
+    this.posture = ex.posture;
   }
 
-  /** Advance by dt seconds and return the synthetic keypoints (640x480 space). */
   tick(dt: number): KP[] {
     this.t += dt;
-    const lo = this.ex.bottomThreshold - 12;
-    const hi = this.ex.topThreshold + 12;
-    const mid = (lo + hi) / 2;
-    const amp = (hi - lo) / 2;
-    const phase = (2 * Math.PI * this.t) / this.repPeriodSec;
-    // startAt 'high' → begin near hi (cos starts at +1); 'low' → begin near lo
-    const sign = this.ex.startAt === 'high' ? 1 : -1;
-    const jitter = (Math.random() - 0.5) * 2.5;
-    const angle = mid + sign * amp * Math.cos(phase) + jitter;
+    const flex = (1 - Math.cos((2 * Math.PI * this.t) / this.period)) / 2; // 0 (extended) .. 1 (flexed)
+    const target = 165 - flex * 100; // 165° extended → 65° flexed
 
-    const [aN, bN, cN] = SIM_TRIPLES[this.ex.id] ?? ['shoulder', 'elbow', 'wrist'];
-    const b = { x: 320, y: 260 };
-    const R = 110;
-    const a = { x: b.x, y: b.y - R };
-    const rad = (angle * Math.PI) / 180;
-    const c = { x: b.x + R * Math.sin(rad), y: b.y - R * Math.cos(rad) };
-
-    // neutral upright skeleton for context/drawing + form rules
-    const base: Record<string, { x: number; y: number }> = {
-      nose: { x: 320, y: 80 },
-      left_shoulder: { x: 290, y: 140 },
-      right_shoulder: { x: 350, y: 140 },
-      left_elbow: { x: 275, y: 200 },
-      right_elbow: { x: 365, y: 200 },
-      left_wrist: { x: 268, y: 255 },
-      right_wrist: { x: 372, y: 255 },
-      left_hip: { x: 298, y: 265 },
-      right_hip: { x: 342, y: 265 },
-      left_knee: { x: 295, y: 350 },
-      right_knee: { x: 345, y: 350 },
-      left_ankle: { x: 295, y: 435 },
-      right_ankle: { x: 345, y: 435 },
+    // neutral standing skeleton (image space ~640x480)
+    const base: Record<string, Pt> = {
+      nose: { x: 320, y: 70 },
+      left_shoulder: { x: 288, y: 140 },
+      right_shoulder: { x: 352, y: 140 },
+      left_elbow: { x: 276, y: 205 },
+      right_elbow: { x: 364, y: 205 },
+      left_wrist: { x: 270, y: 262 },
+      right_wrist: { x: 370, y: 262 },
+      left_hip: { x: 300, y: 272 },
+      right_hip: { x: 340, y: 272 },
+      left_knee: { x: 298, y: 356 },
+      right_knee: { x: 342, y: 356 },
+      left_ankle: { x: 297, y: 440 },
+      right_ankle: { x: 343, y: 440 },
     };
-    base[`left_${aN}`] = a;
-    base[`left_${bN}`] = b;
-    base[`left_${cN}`] = c;
+
+    // lean the torso forward for hinge exercises so posture reads correctly
+    if (this.posture === 'hinge') {
+      for (const s of ['left', 'right'] as const) {
+        base[`${s}_shoulder`].x += 95;
+        base[`${s}_elbow`].x += 95;
+        base[`${s}_wrist`].x += 95;
+        base.nose.x += 95;
+      }
+    }
+
+    const [aN, bN, cN] = JOINT_TRIPLE[this.joint];
+    const animateA = ANIMATE_A[this.joint];
+    const movedName = animateA ? aN : cN;
+    const refName = animateA ? cN : aN;
+    const R = 84;
+
+    for (const s of ['left', 'right'] as const) {
+      const pivot = base[`${s}_${bN}`];
+      const ref = base[`${s}_${refName}`];
+      let u = { x: ref.x - pivot.x, y: ref.y - pivot.y };
+      const mag = Math.hypot(u.x, u.y) || 1;
+      u = { x: u.x / mag, y: u.y / mag };
+      // rotate the reference direction by `target` to place the moving limb; sign
+      // mirrored per side keeps left/right symmetric
+      const sign = s === 'left' ? 1 : -1;
+      const dir = rotate(u, sign * target);
+      base[`${s}_${movedName}`] = { x: pivot.x + dir.x * R, y: pivot.y + dir.y * R };
+    }
 
     return Object.entries(base).map(([name, p]) => ({
       name,
-      x: p.x + (Math.random() - 0.5) * 1.5,
-      y: p.y + (Math.random() - 0.5) * 1.5,
-      // keep right side less confident so the left (simulated) side is dominant
-      score: name.startsWith('right_') ? 0.35 : 0.95,
+      x: p.x + (Math.random() - 0.5) * 1.4,
+      y: p.y + (Math.random() - 0.5) * 1.4,
+      score: 0.9,
     }));
   }
 }

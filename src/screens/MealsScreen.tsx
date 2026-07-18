@@ -4,7 +4,7 @@ import { Body, Button, Card, H1, MacroBar, Ring, Row, Screen, SectionHeader } fr
 import { colors, font, spacing } from '../theme';
 import { useStore } from '../store/useStore';
 import { generateMealPlan, tdee } from '../lib/mealPlanner';
-import { setKcal } from '../lib/exerciseMeta';
+import { findExercise, setKcal } from '../lib/exerciseMeta';
 
 export const MealsScreen: React.FC = () => {
   const store = useStore();
@@ -17,13 +17,18 @@ export const MealsScreen: React.FC = () => {
     store.setMealPlan(generateMealPlan(user.profile));
   };
 
+  const library = store.exercises();
   const today = new Date().toISOString().slice(0, 10);
   const burned = Math.round(
     data.logs
       .filter((l) => l.date.slice(0, 10) === today)
       .reduce(
         (a, w) =>
-          a + w.exercises.reduce((x, e) => x + e.sets.reduce((y, s) => y + setKcal(e.exerciseId, s.durationSec), 0), 0),
+          a +
+          w.exercises.reduce(
+            (x, e) => x + e.sets.reduce((y, s) => y + setKcal(findExercise(library, e.exerciseId), s.durationSec), 0),
+            0,
+          ),
         0,
       ),
   );

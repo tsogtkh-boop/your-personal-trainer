@@ -5,7 +5,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { MealPlan, RecoveryEntry, TrainingPlan, UserProfile, WorkoutLog } from '../types';
-import { EXERCISES } from './exercises';
+import { DEFAULT_EXERCISES } from './exercises';
 import { analyzeRecovery } from './recovery';
 import { dailyReadiness } from './fatigue';
 import { Units, displayWeight, weightUnit } from './units';
@@ -26,11 +26,11 @@ function progressSummary(ctx: CoachContext): string {
   if (!ctx.logs.length) return `You haven't logged a workout yet, ${ctx.name}. Today is a great day to start.`;
   const last = ctx.logs[ctx.logs.length - 1];
   const week = ctx.logs.filter((l) => Date.now() - new Date(l.date).getTime() < 7 * 864e5);
-  const vol = week.reduce((a, b) => a + b.totalVolumeKg, 0);
-  const u = weightUnit(ctx.units);
+  const avgForm = Math.round(week.reduce((a, b) => a + (b.avgFormScore || 0), 0) / Math.max(1, week.length));
+  const mins = week.reduce((a, b) => a + b.durationMin, 0);
   return (
-    `This week: ${week.length} workout${week.length === 1 ? '' : 's'}, ${displayWeight(vol, ctx.units)} ${u} total volume. ` +
-    `Last session you moved ${displayWeight(last.totalVolumeKg, ctx.units)} ${u} across ${last.exercises.length} exercise${last.exercises.length === 1 ? '' : 's'}. ` +
+    `This week: ${week.length} session${week.length === 1 ? '' : 's'}, ${mins} min of coached training, average form score ${avgForm}/100. ` +
+    `Last session you trained ${last.exercises.length} exercise${last.exercises.length === 1 ? '' : 's'} at form ${Math.round(last.avgFormScore)}/100. ` +
     (week.length >= 3 ? 'Consistency is elite right now — keep the streak alive. 🔥' : 'One more session this week and the momentum compounds.')
   );
 }
@@ -47,9 +47,9 @@ function todayAdvice(ctx: CoachContext): string {
 
 function formAnswer(text: string): string | null {
   const t = text.toLowerCase();
-  for (const ex of EXERCISES) {
+  for (const ex of DEFAULT_EXERCISES) {
     if (t.includes(ex.name.toLowerCase()) || t.includes(ex.id.replace('_', ' '))) {
-      return `${ex.name} — my top cues: ${ex.cues.join('. ')}. It mainly works your ${ex.muscles.join(', ')}. Start the camera in Workout and I'll watch every rep and correct you live.`;
+      return `${ex.name} — my top cues: ${ex.cues.join('. ')}. It mainly works your ${ex.muscles.join(', ')}. Start the camera in Workout and I'll watch your technique and coach you live.`;
     }
   }
   return null;
@@ -115,8 +115,10 @@ function buildSystemPrompt(ctx: CoachContext): string {
   const u = weightUnit(ctx.units);
   const recent = ctx.logs.slice(-3).map((l) => ({
     date: l.date.slice(0, 10),
-    volume: `${displayWeight(l.totalVolumeKg, ctx.units)}${u}`,
-    exercises: l.exercises.map((e) => `${e.name} ${e.sets.map((s) => `${s.reps}x${displayWeight(s.weightKg, ctx.units)}${u}`).join(', ')}`),
+    avgFormScore: Math.round(l.avgFormScore),
+    exercises: l.exercises.map(
+      (e) => `${e.name} ${e.sets.map((s) => `form ${s.grade}${s.weightKg ? ` @${displayWeight(s.weightKg, ctx.units)}${u}` : ''}`).join(', ')}`,
+    ),
   }));
   const rec = analyzeRecovery(ctx.recovery);
   return [

@@ -63,11 +63,51 @@ export function dominantSide(m: PoseMap): 'left' | 'right' {
 
 export function jointAngle(m: PoseMap, aName: string, bName: string, cName: string): number | null {
   const s = dominantSide(m);
+  return sideJointAngle(m, s, aName, bName, cName);
+}
+
+/** Joint angle at `bName` for a specific body side; null if keypoints missing/low-confidence. */
+export function sideJointAngle(
+  m: PoseMap,
+  s: 'left' | 'right',
+  aName: string,
+  bName: string,
+  cName: string,
+  minScore = 0.25,
+): number | null {
   const a = m[`${s}_${aName}`] ?? m[aName];
   const b = m[`${s}_${bName}`] ?? m[bName];
   const c = m[`${s}_${cName}`] ?? m[cName];
   if (!a || !b || !c) return null;
-  const minScore = 0.25;
   if ((a.score ?? 1) < minScore || (b.score ?? 1) < minScore || (c.score ?? 1) < minScore) return null;
   return angleDeg(a, b, c);
+}
+
+/** Vertical offset between a left/right pair, normalized by torso length (0 = perfectly level). */
+export function levelOffset(m: PoseMap, base: string): number | null {
+  const l = m[`left_${base}`];
+  const r = m[`right_${base}`];
+  if (!l || !r || (l.score ?? 1) < 0.3 || (r.score ?? 1) < 0.3) return null;
+  const sh = side(m, 'shoulder');
+  const hip = side(m, 'hip');
+  const torso = sh && hip ? Math.hypot(sh.x - hip.x, sh.y - hip.y) : 100;
+  if (torso <= 0) return null;
+  return Math.abs(l.y - r.y) / torso;
+}
+
+/** How confidently the whole body is visible (0..1) over the key landmarks. */
+export function bodyVisibility(m: PoseMap): number {
+  const names = [
+    'left_shoulder',
+    'right_shoulder',
+    'left_hip',
+    'right_hip',
+    'left_knee',
+    'right_knee',
+    'left_ankle',
+    'right_ankle',
+  ];
+  let sum = 0;
+  for (const n of names) sum += m[n]?.score ?? 0;
+  return sum / names.length;
 }

@@ -26,12 +26,11 @@ export interface UserAccount {
 }
 
 export interface SetLog {
-  reps: number;
   weightKg: number;
   durationSec: number;
-  avgRepSec: number;
-  faults: string[];
-  formScore: number; // 0-100
+  formScore: number; // 0-100 from the camera coach
+  grade: string; // A/B/C/D
+  faults: string[]; // top coaching cues to work on
   rpe: number | null;
   avgHr: number | null;
 }
@@ -47,7 +46,7 @@ export interface WorkoutLog {
   date: string; // ISO
   planDayName: string | null;
   exercises: ExerciseLog[];
-  totalVolumeKg: number;
+  avgFormScore: number;
   durationMin: number;
   avgHr: number | null;
   fatigueScore: number | null;

@@ -12,6 +12,7 @@ import {
   UserProfile,
   WorkoutLog,
 } from '../types';
+import { DEFAULT_EXERCISES, Exercise } from '../lib/exercises';
 
 export type Tab = 'home' | 'workout' | 'coach' | 'plan' | 'meals' | 'recovery' | 'profile';
 
@@ -38,6 +39,8 @@ interface PerUserData {
   recovery: RecoveryEntry[];
   chat: ChatMsg[];
   connectors: Connectors;
+  customExercises: Exercise[]; // user-added exercises
+  hiddenExerciseIds: string[]; // built-in exercises the user deleted
 }
 
 const emptyUserData = (): PerUserData => ({
@@ -47,7 +50,15 @@ const emptyUserData = (): PerUserData => ({
   recovery: [],
   chat: [],
   connectors: { appleHealth: false, googleFit: false, fitbit: false, garmin: false, lastSync: null },
+  customExercises: [],
+  hiddenExerciseIds: [],
 });
+
+/** Active library = built-in defaults (minus deleted) + custom exercises. */
+export function activeLibrary(d: PerUserData): Exercise[] {
+  const hidden = new Set(d.hiddenExerciseIds ?? []);
+  return [...DEFAULT_EXERCISES.filter((e) => !hidden.has(e.id)), ...(d.customExercises ?? [])];
+}
 
 interface AppState {
   accounts: UserAccount[];
@@ -66,6 +77,7 @@ interface AppState {
   // derived helpers
   currentUser: () => UserAccount | null;
   data: () => PerUserData;
+  exercises: () => Exercise[];
 
   // actions
   setTab: (t: Tab) => void;
@@ -83,6 +95,9 @@ interface AppState {
   addChat: (msg: ChatMsg) => void;
   setConnector: (key: keyof Connectors, on: boolean) => void;
   markSynced: () => void;
+  addExercise: (ex: Exercise) => void;
+  deleteExercise: (id: string) => void;
+  restoreDefaultExercises: () => void;
 }
 
 export const useStore = create<AppState>()(
@@ -103,6 +118,7 @@ export const useStore = create<AppState>()(
         const { userData, currentEmail } = get();
         return (currentEmail && userData[currentEmail]) || emptyUserData();
       },
+      exercises: () => activeLibrary(get().data()),
 
       setTab: (t) => set({ tab: t }),
 
@@ -232,6 +248,38 @@ export const useStore = create<AppState>()(
               },
             },
           };
+        }),
+
+      addExercise: (ex) =>
+        set((s) => {
+          const e = s.currentEmail!;
+          const d = s.userData[e] ?? emptyUserData();
+          // re-adding a deleted built-in just un-hides it
+          const hidden = (d.hiddenExerciseIds ?? []).filter((id) => id !== ex.id);
+          const custom = ex.custom ? [...(d.customExercises ?? []), ex] : d.customExercises ?? [];
+          return { userData: { ...s.userData, [e]: { ...d, customExercises: custom, hiddenExerciseIds: hidden } } };
+        }),
+
+      deleteExercise: (id) =>
+        set((s) => {
+          const e = s.currentEmail!;
+          const d = s.userData[e] ?? emptyUserData();
+          const isCustom = (d.customExercises ?? []).some((x) => x.id === id);
+          return {
+            userData: {
+              ...s.userData,
+              [e]: isCustom
+                ? { ...d, customExercises: (d.customExercises ?? []).filter((x) => x.id !== id) }
+                : { ...d, hiddenExerciseIds: Array.from(new Set([...(d.hiddenExerciseIds ?? []), id])) },
+            },
+          };
+        }),
+
+      restoreDefaultExercises: () =>
+        set((s) => {
+          const e = s.currentEmail!;
+          const d = s.userData[e] ?? emptyUserData();
+          return { userData: { ...s.userData, [e]: { ...d, hiddenExerciseIds: [] } } };
         }),
     }),
     {

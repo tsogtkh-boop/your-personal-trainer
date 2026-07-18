@@ -1,78 +1,70 @@
 // Fatigue & performance adaptation model.
-// Combines within-set rep slowdown, heart-rate response, RPE, and daily
-// recovery to adjust weight, reps, and rest for the next set / session.
+// Combines the camera coach's form score, heart-rate response, RPE, and daily
+// recovery to adjust weight and rest for the next set / session.
 
 import { RecoveryEntry, SetLog } from '../types';
 
 export interface SetAdjustment {
   weightDeltaPct: number; // e.g. -10 → reduce weight 10%
-  repsDelta: number;
   restDeltaSec: number;
   message: string;
 }
 
 export interface FatigueInputs {
-  velocityLossRatio: number | null; // lastReps/firstReps duration ratio (>1 = slowing)
   rpe: number | null; // 1..10
   avgHr: number | null;
   age: number;
-  formScore: number; // 0..100
-  targetRepsHit: boolean;
-  repsOverTarget: number;
+  formScore: number; // 0..100 from the camera coach
 }
 
-/** 0..100 — how fatigued this set looked. */
+/** 0..100 — how fatigued / taxed this set looked. */
 export function setFatigueScore(i: FatigueInputs): number {
   let score = 0;
-  if (i.velocityLossRatio !== null) {
-    // 1.0 = no slowdown, 1.6+ = heavy slowdown
-    score += Math.min(40, Math.max(0, (i.velocityLossRatio - 1.05) * 80));
-  }
-  if (i.rpe !== null) score += Math.min(35, Math.max(0, (i.rpe - 6) * 10));
+  if (i.rpe !== null) score += Math.min(45, Math.max(0, (i.rpe - 6) * 12));
   if (i.avgHr !== null) {
     const max = 208 - 0.7 * i.age;
-    score += Math.min(25, Math.max(0, (i.avgHr / max - 0.72) * 120));
+    score += Math.min(30, Math.max(0, (i.avgHr / max - 0.72) * 120));
   }
-  if (i.formScore < 75) score += 12;
+  // form breaking down under load is itself a fatigue signal
+  score += Math.min(25, Math.max(0, (80 - i.formScore) * 0.6));
   return Math.round(Math.min(100, score));
 }
 
 export function adaptNextSet(i: FatigueInputs): SetAdjustment {
   const fatigue = setFatigueScore(i);
 
-  if (fatigue >= 65 || (i.rpe !== null && i.rpe >= 9.5)) {
+  if (i.formScore < 60 || fatigue >= 65 || (i.rpe !== null && i.rpe >= 9.5)) {
     return {
       weightDeltaPct: -10,
-      repsDelta: -2,
       restDeltaSec: +45,
-      message: "That set took a lot out of you — I'm dropping the weight 10% and adding rest. Quality over grinding.",
+      message:
+        i.formScore < 60
+          ? 'Your form started slipping — dropping the weight 10% so every rep stays clean. Quality over grinding.'
+          : "That set took a lot out of you — lighter next set and more rest. Quality over grinding.",
     };
   }
   if (fatigue >= 45) {
     return {
       weightDeltaPct: -5,
-      repsDelta: -1,
       restDeltaSec: +30,
-      message: 'You slowed down noticeably at the end. Slightly lighter next set, and take a longer rest.',
+      message: 'Getting tough — slightly lighter next set, and take a longer rest.',
     };
   }
-  if (fatigue <= 15 && i.targetRepsHit && i.repsOverTarget >= 2 && i.formScore >= 85) {
+  if (fatigue <= 15 && i.formScore >= 88) {
     return {
       weightDeltaPct: +5,
-      repsDelta: 0,
       restDeltaSec: -15,
-      message: 'Too easy for you! Adding 5% next set — keep that clean form.',
+      message: 'Clean and easy! Adding 5% next set — keep that beautiful form.',
     };
   }
-  if (fatigue <= 25 && i.targetRepsHit && i.formScore >= 80) {
+  if (fatigue <= 25 && i.formScore >= 80) {
     return {
       weightDeltaPct: +2.5,
-      repsDelta: 0,
       restDeltaSec: 0,
       message: 'Solid, controlled set. Nudging the weight up a touch.',
     };
   }
-  return { weightDeltaPct: 0, repsDelta: 0, restDeltaSec: 0, message: 'Good set — same weight, same target. Stay consistent.' };
+  return { weightDeltaPct: 0, restDeltaSec: 0, message: 'Good set — same weight next round. Stay consistent.' };
 }
 
 /** Daily readiness 0..100 from recovery data (sleep, HRV, resting HR, soreness). */
@@ -108,5 +100,5 @@ export function readinessLoadMultiplier(readiness: number): number {
 
 export function summarizeSetForCoach(s: SetLog): string {
   const faults = s.faults.length ? ` Watch: ${s.faults.join(' ')}` : ' Form was clean.';
-  return `${s.reps} reps at ${s.weightKg} kg, form score ${s.formScore}.${faults}`;
+  return `Form grade ${s.grade} (${s.formScore}/100)${s.weightKg ? ` at ${s.weightKg} kg` : ''}.${faults}`;
 }

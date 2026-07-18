@@ -1,7 +1,11 @@
 // Personalized training plan generation based on goal, experience and schedule.
+// Works from the user's active exercise library, skipping any exercise they've
+// deleted. Reps are a soft target the coach references — the workout is
+// form-coached, not rep-counted.
 
 import { Goal, PlanDay, PlannedExercise, TrainingPlan, UserProfile } from '../types';
-import { exerciseById } from './exercises';
+import { Exercise } from './exercises';
+import { findExercise } from './exerciseMeta';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -9,7 +13,7 @@ interface Rx {
   sets: number;
   reps: number;
   restSec: number;
-  intensity: number; // fraction of "working weight" baseline
+  intensity: number;
 }
 
 function prescription(goal: Goal, experience: UserProfile['experience']): Rx {
@@ -28,9 +32,7 @@ function prescription(goal: Goal, experience: UserProfile['experience']): Rx {
   return rx;
 }
 
-/** Rough starting working weight scaled by bodyweight, sex and experience. */
-function startWeight(exerciseId: string, p: UserProfile, intensity: number): number {
-  const ex = exerciseById(exerciseId);
+function startWeight(ex: Exercise, p: UserProfile, intensity: number): number {
   if (!ex.weighted) return 0;
   const expMult = p.experience === 'beginner' ? 0.7 : p.experience === 'advanced' ? 1.35 : 1.0;
   const sexMult = p.sex === 'female' ? 0.72 : 1.0;
@@ -46,17 +48,15 @@ function startWeight(exerciseId: string, p: UserProfile, intensity: number): num
     lateral_raise: 0.06,
     leg_extension: 0.35,
   };
-  const raw = p.weightKg * (bwRatio[exerciseId] ?? 0.2) * expMult * sexMult * intensity;
+  const raw = p.weightKg * (bwRatio[ex.id] ?? 0.2) * expMult * sexMult * intensity;
   return Math.max(2.5, Math.round(raw / 2.5) * 2.5);
 }
 
-function mkExercise(id: string, p: UserProfile, rx: Rx, note?: string): PlannedExercise {
-  const ex = exerciseById(id);
-  const w = startWeight(id, p, rx.intensity);
+function mkExercise(ex: Exercise, p: UserProfile, rx: Rx): PlannedExercise {
+  const w = startWeight(ex, p, rx.intensity);
   return {
-    exerciseId: id,
+    exerciseId: ex.id,
     name: ex.name,
-    note,
     sets: Array.from({ length: rx.sets }, () => ({
       targetReps: ex.weighted ? rx.reps : Math.round(rx.reps * 1.2),
       targetWeightKg: w,
@@ -90,16 +90,24 @@ const SPLITS: Record<number, { name: string; focus: string; ids: string[] }[]> =
   ],
 };
 
-export function generateTrainingPlan(p: UserProfile, daysPerWeek: number): TrainingPlan {
+export function generateTrainingPlan(p: UserProfile, daysPerWeek: number, library: Exercise[]): TrainingPlan {
   const days = Math.min(5, Math.max(2, daysPerWeek));
   const rx = prescription(p.goal, p.experience);
   const split = SPLITS[days];
 
-  const planDays: PlanDay[] = split.map((d) => ({
-    name: d.name,
-    focus: d.focus,
-    exercises: d.ids.map((id) => mkExercise(id, p, rx)),
-  }));
+  let planDays: PlanDay[] = split.map((d) => {
+    const exs = d.ids
+      .map((id) => findExercise(library, id))
+      .filter((e): e is Exercise => !!e)
+      .map((ex) => mkExercise(ex, p, rx));
+    return { name: d.name, focus: d.focus, exercises: exs };
+  });
+
+  // if the user deleted a lot of built-ins, backfill empty days from the library
+  planDays = planDays.map((d) => {
+    if (d.exercises.length > 0) return d;
+    return { ...d, exercises: library.slice(0, 4).map((ex) => mkExercise(ex, p, rx)) };
+  });
 
   const goalNames: Record<Goal, string> = {
     weight_loss: 'Lean Down',
@@ -108,12 +116,10 @@ export function generateTrainingPlan(p: UserProfile, daysPerWeek: number): Train
     endurance: 'Engine Builder',
   };
   const progression: Record<Goal, string> = {
-    weight_loss:
-      'Keep rests short. Each week, add 1 rep per set until you hit the top of the range, then add 2.5 kg and reset reps.',
-    muscle_gain:
-      'Double progression: when you hit all target reps with a form score above 80, add 2.5 kg (upper) / 5 kg (lower) next session.',
-    strength: 'Add 2.5 kg per session on main lifts while bar speed stays crisp. Deload 10% every 5th week.',
-    endurance: 'Add 2 reps per week per exercise. Every 3rd week, cut rest by 5 seconds.',
+    weight_loss: 'Keep rests short and quality high. When your form score holds above 80, add a set or a touch of weight.',
+    muscle_gain: 'When you finish a session with a form score above 80, add 2.5 kg (upper) / 5 kg (lower) next time.',
+    strength: 'Add 2.5 kg per session on main lifts while your form grade stays A/B. Deload 10% every 5th week.',
+    endurance: 'Add time under tension each week. Every 3rd week, cut rest by 5 seconds.',
   };
 
   return {

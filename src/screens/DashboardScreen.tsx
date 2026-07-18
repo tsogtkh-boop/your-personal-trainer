@@ -1,12 +1,10 @@
 import React, { useMemo } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Body, GradientCard, Ring, Row, Screen, SectionHeader, StatTile, TaskRow } from '../components/UI';
 import { colors, font, radius, spacing } from '../theme';
 import { useStore } from '../store/useStore';
 import { dailyReadiness } from '../lib/fatigue';
-import { EXERCISES } from '../lib/exercises';
-import { metaFor } from '../lib/exerciseMeta';
-import { exerciseImage } from '../lib/demoMedia';
+import { blurbFor, findExercise, kcalPerMinFor, tintFor } from '../lib/exerciseMeta';
 
 const greeting = () => {
   const h = new Date().getHours();
@@ -31,7 +29,11 @@ export const DashboardScreen: React.FC = () => {
   const weekKcal = Math.round(week.reduce((a, w) => a + w.durationMin * 7, 0));
 
   const nextDay = data.plan ? data.plan.days[data.logs.length % data.plan.days.length] : null;
-  const goalCards = EXERCISES.filter((e) => ['bench_press', 'deadlift', 'squat', 'pull_up', 'hip_thrust'].includes(e.id));
+  const library = store.exercises();
+  const goalCards = library
+    .filter((e) => ['bench_press', 'deadlift', 'squat', 'pull_up', 'hip_thrust'].includes(e.id))
+    .concat(library.filter((e) => e.custom))
+    .slice(0, 6);
 
   return (
     <Screen>
@@ -79,45 +81,36 @@ export const DashboardScreen: React.FC = () => {
       {/* start new goal */}
       <SectionHeader title="Start new goal" actionLabel="See all" onAction={() => store.setTab('workout')} />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing(1) }}>
-        {goalCards.map((e) => {
-          const m = metaFor(e.id);
-          const img = exerciseImage(e.id);
-          return (
-            <Pressable key={e.id} style={styles.goalCard} onPress={() => store.setTab('workout')}>
-              <View style={[styles.goalThumb, { backgroundColor: m.tint, overflow: 'hidden' }]}>
-                {img ? (
-                  <Image source={img} style={{ position: 'absolute', width: '100%', height: '100%' }} resizeMode="cover" />
-                ) : (
-                  <Text style={{ fontSize: 42 }}>{m.emoji}</Text>
-                )}
-                <View style={styles.goalPlay}>
-                  <Text style={{ color: '#0A0A0E', fontSize: 12, fontWeight: '900', marginLeft: 1 }}>▶</Text>
-                </View>
+        {goalCards.map((e) => (
+          <Pressable key={e.id} style={styles.goalCard} onPress={() => store.setTab('workout')}>
+            <View style={[styles.goalThumb, { backgroundColor: tintFor(e) }]}>
+              <Text style={{ fontSize: 52 }}>{e.emoji}</Text>
+              <View style={styles.goalPlay}>
+                <Text style={{ color: '#0A0A0E', fontSize: 12, fontWeight: '900', marginLeft: 1 }}>▶</Text>
               </View>
-              <Text style={styles.goalTitle}>{e.name}</Text>
-              <Text style={styles.goalBlurb}>{m.blurb}</Text>
-              <Row style={{ gap: spacing(1.5), marginTop: 7 }}>
-                <Text style={[styles.goalMeta, { color: colors.green }]}>🕐 35 min</Text>
-                <Text style={[styles.goalMeta, { color: colors.amber }]}>🔥 {m.kcalPerMin * 15} cal</Text>
-              </Row>
-            </Pressable>
-          );
-        })}
+            </View>
+            <Text style={styles.goalTitle}>{e.name}</Text>
+            <Text style={styles.goalBlurb}>{blurbFor(e)}</Text>
+            <Row style={{ gap: spacing(1.5), marginTop: 7 }}>
+              <Text style={[styles.goalMeta, { color: colors.green }]}>🕐 ~5 min</Text>
+              <Text style={[styles.goalMeta, { color: colors.amber }]}>🔥 {kcalPerMinFor(e) * 5} cal</Text>
+            </Row>
+          </Pressable>
+        ))}
       </ScrollView>
 
       {/* today tasks */}
       <SectionHeader title="Today task" actionLabel="See all" onAction={() => store.setTab('plan')} />
       {nextDay ? (
         nextDay.exercises.map((e) => {
-          const m = metaFor(e.exerciseId);
+          const lib = findExercise(library, e.exerciseId);
           return (
             <TaskRow
               key={e.exerciseId}
-              emoji={m.emoji}
-              emojiTint={m.tint}
-              image={exerciseImage(e.exerciseId)}
+              emoji={lib?.emoji ?? '🏋️'}
+              emojiTint={lib ? tintFor(lib) : colors.tintPurple}
               title={e.name}
-              meta={`🕐 ${e.sets.length} sets × ${e.sets[0].targetReps}   🔥 ${m.kcalPerMin * 5 * e.sets.length} cal`}
+              meta={`🕐 ${e.sets.length} coaching sets   🔥 ~${(lib ? kcalPerMinFor(lib) : 6) * 5 * e.sets.length} cal`}
               onPlay={() => store.setTab('workout')}
             />
           );
