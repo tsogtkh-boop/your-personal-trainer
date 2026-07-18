@@ -25,11 +25,19 @@ function progressSummary(ctx: CoachContext): string {
   if (!ctx.logs.length) return `You haven't logged a workout yet, ${ctx.name}. Today is a great day to start.`;
   const last = ctx.logs[ctx.logs.length - 1];
   const week = ctx.logs.filter((l) => Date.now() - new Date(l.date).getTime() < 7 * 864e5);
-  const avgForm = Math.round(week.reduce((a, b) => a + (b.avgFormScore || 0), 0) / Math.max(1, week.length));
+  const coachedWeek = week.filter((l) => l.avgFormScore > 0); // manual logs have no form score
+  const avgForm = coachedWeek.length
+    ? Math.round(coachedWeek.reduce((a, b) => a + b.avgFormScore, 0) / coachedWeek.length)
+    : 0;
   const mins = week.reduce((a, b) => a + b.durationMin, 0);
+  const formLine = avgForm ? `, average form score ${avgForm}/100` : '';
+  const lastLine =
+    last.avgFormScore > 0
+      ? `Last session you trained ${last.exercises.length} exercise${last.exercises.length === 1 ? '' : 's'} at form ${Math.round(last.avgFormScore)}/100. `
+      : `Last session you logged ${last.exercises.length} exercise${last.exercises.length === 1 ? '' : 's'}. `;
   return (
-    `This week: ${week.length} session${week.length === 1 ? '' : 's'}, ${mins} min of coached training, average form score ${avgForm}/100. ` +
-    `Last session you trained ${last.exercises.length} exercise${last.exercises.length === 1 ? '' : 's'} at form ${Math.round(last.avgFormScore)}/100. ` +
+    `This week: ${week.length} session${week.length === 1 ? '' : 's'}, ${mins} min of training${formLine}. ` +
+    lastLine +
     (week.length >= 3 ? 'Consistency is elite right now — keep the streak alive. 🔥' : 'One more session this week and the momentum compounds.')
   );
 }
@@ -116,7 +124,17 @@ function buildSystemPrompt(ctx: CoachContext): string {
     date: l.date.slice(0, 10),
     avgFormScore: Math.round(l.avgFormScore),
     exercises: l.exercises.map(
-      (e) => `${e.name} ${e.sets.map((s) => `form ${s.grade}${s.weightKg ? ` @${displayWeight(s.weightKg, ctx.units)}${u}` : ''}`).join(', ')}`,
+      (e) =>
+        `${e.name} ${e.sets
+          .map((s) => {
+            const parts = [
+              s.reps != null ? `${s.reps} reps` : '',
+              s.weightKg ? `@${displayWeight(s.weightKg, ctx.units)}${u}` : '',
+              s.grade ? `form ${s.grade}` : '',
+            ].filter(Boolean);
+            return parts.join(' ') || 'logged';
+          })
+          .join(', ')}`,
     ),
   }));
   const rec = analyzeRecovery(ctx.recovery);

@@ -215,7 +215,7 @@ export const ProfileScreen: React.FC = () => {
         {data.logs.length === 0 && <Body dim>Nothing logged yet — every camera workout is saved here automatically.</Body>}
         {[...data.logs].reverse().slice(0, 8).map((l) => (
           <Body key={l.id} dim style={{ marginBottom: 4 }}>
-            {`${new Date(l.date).toLocaleDateString()} — ${l.planDayName ?? 'Quick session'}: ${l.exercises.map((e) => e.name).join(', ')} · form ${Math.round(l.avgFormScore)} ${l.synced ? '· ✅ synced' : ''}`}
+            {`${new Date(l.date).toLocaleDateString()} — ${l.planDayName ?? 'Quick session'}: ${l.exercises.map((e) => e.name).join(', ')}${l.avgFormScore > 0 ? ` · form ${Math.round(l.avgFormScore)}` : ' · logged'}${l.synced ? ' · ✅ synced' : ''}`}
           </Body>
         ))}
       </Card>

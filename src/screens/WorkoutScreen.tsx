@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, Text, View } from 'react-native';
-import { Body, Button, Card, Chip, H1, ProgressBar, Row, Screen, Stat, Title } from '../components/UI';
+import { Body, Button, Card, Chip, H1, Input, ProgressBar, Row, Screen, Stat, Title } from '../components/UI';
 import { colors, spacing } from '../theme';
 import { useStore } from '../store/useStore';
 import { Exercise } from '../lib/exercises';
@@ -8,7 +8,8 @@ import { KP, toPoseMap } from '../lib/geometry';
 import { SmartCoach } from '../lib/smartCoach';
 import { PoseEngine } from '../lib/poseEngine';
 import { VoiceControl, VoiceCommand, speak, setSpeechEnabled, voiceSupported } from '../lib/voice';
-import { displayWeight, kgToLb, weightUnit } from '../lib/units';
+import { displayWeight, kgToLb, parseWeightToKg, weightUnit } from '../lib/units';
+import { ManualLogScreen } from './ManualLogScreen';
 import { HeartRateMonitor, bluetoothSupported, hrZone, restRecommendation } from '../lib/bluetoothHR';
 import { adaptNextSet, setFatigueScore } from '../lib/fatigue';
 import { ExerciseLog, SetLog, WorkoutLog } from '../types';
@@ -61,6 +62,10 @@ export const WorkoutScreen: React.FC = () => {
   const [voiceOn, setVoiceOn] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [engineLoading, setEngineLoading] = useState(false);
+  const [manualMode, setManualMode] = useState(false);
+  // what you actually did this set (typed) — logged alongside the form grade
+  const [weightInput, setWeightInput] = useState('');
+  const [repsInput, setRepsInput] = useState('');
 
   // ---- refs ----
   const coachRef = useRef<SmartCoach | null>(null);
@@ -93,6 +98,18 @@ export const WorkoutScreen: React.FC = () => {
   const planDay = data.plan ? data.plan.days[data.logs.length % data.plan.days.length] : null;
   const currentEx = session.exercises[exIdx];
   const currentSet: LiveSetPlan | undefined = currentEx?.sets[setIdx];
+
+  // prefill the weight/reps fields from the plan whenever a new set starts
+  useEffect(() => {
+    if (phase !== 'active') return;
+    const cs = session.exercises[exIdx]?.sets[setIdx];
+    const ex = session.exercises[exIdx]?.ex;
+    if (cs && ex) {
+      setWeightInput(ex.weighted ? displayWeight(cs.weightKg, units) : '');
+      setRepsInput('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exIdx, setIdx, phase]);
 
   // ------------------------------------------------------------------ session
   const startFromPlan = () => {
@@ -259,9 +276,15 @@ export const WorkoutScreen: React.FC = () => {
       ? Math.round(hrSamplesRef.current.reduce((a, b) => a + b, 0) / hrSamplesRef.current.length)
       : null;
     const { exIdx: e, setIdx: s } = idxRef.current;
+    const ex = sessionRef.current.exercises[e].ex;
     const plan = sessionRef.current.exercises[e].sets[s];
+    // use the numbers you typed; fall back to the plan's weight
+    const typedWeightKg = ex.weighted ? parseWeightToKg(weightInput, units) || plan.weightKg : 0;
+    const typedReps = repsInput.trim() ? parseInt(repsInput, 10) || null : null;
+    plan.weightKg = typedWeightKg; // so the next-set adaptation is based on what you actually lifted
     const log: SetLog = {
-      weightKg: sessionRef.current.exercises[e].ex.weighted ? plan.weightKg : 0,
+      reps: typedReps,
+      weightKg: typedWeightKg,
       durationSec: Math.round(dur),
       formScore: sum.score,
       grade: sum.grade,
@@ -385,12 +408,15 @@ export const WorkoutScreen: React.FC = () => {
     const exercises = logsRef.current.filter((e) => e.sets.length > 0);
     if (exercises.length) {
       const allSets = exercises.flatMap((e) => e.sets);
-      const avgFormScore = Math.round(allSets.reduce((a, s) => a + s.formScore, 0) / Math.max(1, allSets.length));
+      const coached = allSets.filter((s) => s.formScore != null);
+      const avgFormScore = coached.length
+        ? Math.round(coached.reduce((a, s) => a + (s.formScore ?? 0), 0) / coached.length)
+        : 0;
       const avgHr = allHrRef.current.length
         ? Math.round(allHrRef.current.reduce((a, b) => a + b, 0) / allHrRef.current.length)
         : null;
       const fatigueScores = allSets.map((s) =>
-        setFatigueScore({ rpe: s.rpe, avgHr: s.avgHr, age: user?.profile.age ?? 30, formScore: s.formScore }),
+        setFatigueScore({ rpe: s.rpe, avgHr: s.avgHr, age: user?.profile.age ?? 30, formScore: s.formScore ?? 100 }),
       );
       const log: WorkoutLog = {
         id: uid(),
@@ -452,12 +478,34 @@ export const WorkoutScreen: React.FC = () => {
         item.sets[i].weightKg = Math.max(0, Math.round((item.sets[i].weightKg * (1 + dir * 0.1)) / 2.5) * 2.5);
       }
       setSession({ ...sess });
+      setWeightInput(displayWeight(item.sets[s].weightKg, units)); // reflect in the input
       msg = dir > 0 ? `Cranking it up — ${spokenWeight(item.sets[s].weightKg)} now.` : `Easing off — ${spokenWeight(item.sets[s].weightKg)} now.`;
     } else {
       msg = dir > 0 ? 'Make it harder — add a slow pause at the hardest point.' : 'Easing off — shorten the range and stay controlled.';
     }
     setCoachMsg(msg);
     speak(msg, { interrupt: true });
+  };
+
+  const addSet = () => {
+    const sess = sessionRef.current;
+    const { exIdx: e } = idxRef.current;
+    const item = sess.exercises[e];
+    if (!item) return;
+    const last = item.sets[item.sets.length - 1];
+    item.sets.push({ ...last });
+    setSession({ ...sess });
+    speak('Added a set.');
+  };
+
+  const removeSet = () => {
+    const sess = sessionRef.current;
+    const { exIdx: e, setIdx: s } = idxRef.current;
+    const item = sess.exercises[e];
+    if (!item || item.sets.length <= s + 1) return; // keep at least the current set
+    item.sets.pop();
+    setSession({ ...sess });
+    speak('Removed a set.');
   };
 
   // ------------------------------------------------------------------ voice + HR
@@ -569,6 +617,10 @@ export const WorkoutScreen: React.FC = () => {
   const zone = hr !== null ? hrZone(hr, user?.profile.age ?? 30) : null;
 
   // ================================================================== RENDER
+  if (manualMode) {
+    return <ManualLogScreen onDone={() => setManualMode(false)} />;
+  }
+
   if (phase === 'setup') {
     return (
       <Screen>
@@ -623,6 +675,15 @@ export const WorkoutScreen: React.FC = () => {
             </Card>
 
             <Card>
+              <H1>Already trained?</H1>
+              <Body dim style={{ marginBottom: spacing(1.5) }}>
+                Log the weights, reps and sets you did — no camera needed. Great for machines, cardio, or sessions
+                away from your phone.
+              </Body>
+              <Button title="✎ Log a workout manually" onPress={() => setManualMode(true)} />
+            </Card>
+
+            <Card>
               <Body dim>
                 {`🎤 Voice commands: "pause workout", "resume", "make this harder / easier", "done set" / "next", "skip rest", "how am I doing", "end workout".${voiceSupported() ? '' : ' (Voice input needs Chrome or Edge.)'}`}
               </Body>
@@ -635,22 +696,24 @@ export const WorkoutScreen: React.FC = () => {
 
   if (phase === 'summary') {
     const exercises = logsRef.current.filter((e) => e.sets.length > 0);
-    const allSets = exercises.flatMap((e) => e.sets);
-    const avgForm = allSets.length ? Math.round(allSets.reduce((a, s) => a + s.formScore, 0) / allSets.length) : 100;
+    const coachedSets = exercises.flatMap((e) => e.sets).filter((s) => s.formScore != null);
+    const avgForm = coachedSets.length
+      ? Math.round(coachedSets.reduce((a, s) => a + (s.formScore ?? 0), 0) / coachedSets.length)
+      : 0;
     return (
       <Screen>
         <Title>Workout complete 🎉</Title>
         <Row style={{ gap: spacing(1), marginBottom: spacing(1.5) }}>
           <Stat label="exercises" value={`${exercises.length}`} />
-          <Stat label="avg form" value={`${avgForm}`} color={gradeColor(avgForm)} />
-          <Stat label="grade" value={gradeOf(avgForm)} color={gradeColor(avgForm)} />
+          <Stat label="avg form" value={avgForm ? `${avgForm}` : '—'} color={gradeColor(avgForm)} />
+          <Stat label="grade" value={avgForm ? gradeOf(avgForm) : '—'} color={gradeColor(avgForm)} />
         </Row>
         {exercises.map((e) => (
           <Card key={e.exerciseId}>
             <H1>{e.name}</H1>
             {e.sets.map((s, i) => (
               <Body key={i} dim>
-                {`Set ${i + 1}: form ${s.grade} (${s.formScore})${s.weightKg ? ` · ${displayWeight(s.weightKg, units)} ${weightUnit(units)}` : ''} · ${s.durationSec}s${s.rpe ? ` · RPE ${s.rpe}` : ''}${s.avgHr ? ` · HR ${s.avgHr}` : ''}${s.faults.length ? `\n   💡 ${s.faults.join(' ')}` : ''}`}
+                {`Set ${i + 1}: ${s.reps != null ? `${s.reps} reps` : ''}${s.weightKg ? ` × ${displayWeight(s.weightKg, units)} ${weightUnit(units)}` : s.reps != null ? '' : ''}${s.grade ? `${s.reps != null || s.weightKg ? ' · ' : ''}form ${s.grade} (${s.formScore})` : ''} · ${s.durationSec}s${s.rpe ? ` · RPE ${s.rpe}` : ''}${s.avgHr ? ` · HR ${s.avgHr}` : ''}${s.faults.length ? `\n   💡 ${s.faults.join(' ')}` : ''}`}
               </Body>
             ))}
           </Card>
@@ -739,6 +802,35 @@ export const WorkoutScreen: React.FC = () => {
           value={ex?.weighted ? displayWeight(currentSet?.weightKg ?? 0, units) : 'BW'}
         />
       </Row>
+
+      {/* log what you actually did this set */}
+      {(phase === 'active' || phase === 'paused') && (
+        <Card>
+          <Row style={{ justifyContent: 'space-between', marginBottom: spacing(0.5) }}>
+            <H1 style={{ marginBottom: 0 }}>Log this set</H1>
+            <Body dim>{`Set ${setIdx + 1} of ${currentEx?.sets.length ?? 0}`}</Body>
+          </Row>
+          <Row>
+            {ex?.weighted && (
+              <View style={{ flex: 1 }}>
+                <Body dim style={{ marginBottom: 4 }}>{`Weight (${weightUnit(units)})`}</Body>
+                <Input value={weightInput} onChangeText={setWeightInput} placeholder="0" keyboardType="numeric" style={{ marginBottom: 0 }} />
+              </View>
+            )}
+            <View style={{ flex: 1 }}>
+              <Body dim style={{ marginBottom: 4 }}>Reps</Body>
+              <Input value={repsInput} onChangeText={setRepsInput} placeholder="e.g. 8" keyboardType="numeric" style={{ marginBottom: 0 }} />
+            </View>
+          </Row>
+          <Row style={{ marginTop: spacing(1), flexWrap: 'wrap' }}>
+            <Button title="＋ Add set" kind="ghost" small onPress={addSet} />
+            <Button title="− Remove set" kind="ghost" small onPress={removeSet} />
+          </Row>
+          <Body dim style={{ marginTop: spacing(0.75), fontSize: 12 }}>
+            Type what you actually lifted — it's saved with your form grade when you tap Done set.
+          </Body>
+        </Card>
+      )}
 
       {issues.length > 0 && phase === 'active' && (
         <Row style={{ flexWrap: 'wrap', marginBottom: spacing(1) }}>

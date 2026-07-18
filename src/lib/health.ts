@@ -14,14 +14,23 @@ export const CONNECTOR_INFO: { key: 'appleHealth' | 'googleFit' | 'fitbit' | 'ga
 ];
 
 export function workoutsToCSV(logs: WorkoutLog[]): string {
-  const rows = ['date,exercise,set,duration_sec,weight_kg,form_score,grade,avg_hr,rpe'];
+  const rows = ['date,exercise,set,reps,duration_sec,weight_kg,form_score,grade,avg_hr,rpe'];
   for (const w of logs) {
     for (const ex of w.exercises) {
       ex.sets.forEach((s, i) => {
         rows.push(
-          [w.date.slice(0, 10), ex.name, i + 1, s.durationSec, s.weightKg, s.formScore, s.grade, s.avgHr ?? '', s.rpe ?? ''].join(
-            ',',
-          ),
+          [
+            w.date.slice(0, 10),
+            ex.name,
+            i + 1,
+            s.reps ?? '',
+            s.durationSec,
+            s.weightKg,
+            s.formScore ?? '',
+            s.grade ?? '',
+            s.avgHr ?? '',
+            s.rpe ?? '',
+          ].join(','),
         );
       });
     }

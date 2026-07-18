@@ -77,8 +77,10 @@ export const PlanScreen: React.FC = () => {
       ),
   );
   const weekForm = useMemo(() => {
-    const wk = data.logs.filter((l) => Date.now() - new Date(l.date).getTime() < 7 * 864e5);
-    return wk.length ? Math.round(wk.reduce((a, w) => a + (w.avgFormScore || 0), 0) / wk.length) : 0;
+    const wk = data.logs.filter(
+      (l) => Date.now() - new Date(l.date).getTime() < 7 * 864e5 && l.avgFormScore > 0,
+    );
+    return wk.length ? Math.round(wk.reduce((a, w) => a + w.avgFormScore, 0) / wk.length) : 0;
   }, [data.logs]);
   const lastSleep = data.recovery.length ? data.recovery[data.recovery.length - 1].sleepHours : null;
   const nextDay = data.plan ? data.plan.days[data.logs.length % data.plan.days.length] : null;

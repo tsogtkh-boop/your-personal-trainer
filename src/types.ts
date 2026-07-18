@@ -26,10 +26,11 @@ export interface UserAccount {
 }
 
 export interface SetLog {
+  reps: number | null; // reps you did (null = not entered)
   weightKg: number;
   durationSec: number;
-  formScore: number; // 0-100 from the camera coach
-  grade: string; // A/B/C/D
+  formScore: number | null; // camera form score 0-100 (null = manually logged, no camera)
+  grade: string | null; // A/B/C/D (null = not coached)
   faults: string[]; // top coaching cues to work on
   rpe: number | null;
   avgHr: number | null;
