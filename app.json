@@ -23,6 +23,9 @@
     },
     "plugins": [
       "expo-asset"
-    ]
+    ],
+    "experiments": {
+      "baseUrl": "/your-personal-trainer/"
+    }
   }
 }
